@@ -1,0 +1,298 @@
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { usePermissions } from './usePermissions';
+import { runBackgroundSync } from './useSyncService';
+import {
+  getPaymentOverview,
+  getPendingUploadCount,
+  getPendingByDateSession,
+} from '../database/db';
+import {
+  IconUsers, IconUserPlus, IconBell, IconNotes,
+  IconChecklist, IconCloudUpload, IconAlertTriangle, IconCloudDownload,
+  IconChevronRight, IconCrown, IconUserCheck, IconTrophy, IconEye, IconX,
+  IconNews, IconPhoto, IconBrandYoutube, IconBook, IconMail, IconLogin, IconTool,
+} from '@tabler/icons-react';
+
+const C = { green: '#1a472a', gold: '#d4af37', red: '#c0392b', orange: '#e67e22' };
+
+// ─── Pending upload drawer ────────────────────────────────────────────────────
+function PendingDrawer({
+  items, onClose, onGoToDate,
+}: {
+  items: { attendance_date:string; session_type:string; total:number; present:number; absent:number }[];
+  onClose: () => void;
+  onGoToDate: (date:string, session:string) => void;
+}) {
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function fmtDate(d: string) {
+    const [y,m,day] = d.split('-');
+    return `${parseInt(day)} ${MONTHS[parseInt(m)-1]} ${y}`;
+  }
+
+  // Group rows by date for cleaner display
+  const byDate: Record<string, typeof items> = {};
+  items.forEach(r => {
+    if (!byDate[r.attendance_date]) byDate[r.attendance_date] = [];
+    byDate[r.attendance_date].push(r);
+  });
+
+  return (
+    <div onClick={onClose} style={{
+      position:'fixed', inset:0, zIndex:1000,
+      backgroundColor:'rgba(0,0,0,0.6)',
+      display:'flex', alignItems:'flex-end',
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        backgroundColor:'#fff', width:'100%', maxHeight:'80vh',
+        borderRadius:'20px 20px 0 0', overflowY:'auto', paddingBottom:32,
+      }}>
+        {/* Header */}
+        <div style={{
+          backgroundColor: C.green, padding:'18px 18px 14px',
+          borderRadius:'20px 20px 0 0',
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+        }}>
+          <div>
+            <div style={{ color:'#fff', fontWeight:800, fontSize:16, display:'flex', alignItems:'center', gap:8 }}>
+              <IconCloudUpload size={18} /> Pending Upload
+            </div>
+            <div style={{ color:'rgba(255,255,255,0.65)', fontSize:12, marginTop:2 }}>
+              {items.length} session{items.length>1?'s':''} not yet synced to server
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={{ background:'none', border:'none', color:'rgba(255,255,255,0.8)', cursor:'pointer' }}><IconX size={22}/></button>
+        </div>
+
+        <div style={{ padding:'14px 16px 0' }}>
+          {/* Explain */}
+          <div style={{
+            backgroundColor:'#fff8e1', border:'1px solid #ffe082',
+            borderRadius:10, padding:'10px 14px', marginBottom:14, fontSize:13, color:'#7b5800',
+          }}>
+            Tap a session to view or edit it, then go to <strong>Sync → Upload Attendance</strong> to push to server.
+          </div>
+
+          {Object.entries(byDate).map(([date, sessions]) => (
+            <div key={date} style={{ marginBottom:14 }}>
+              {/* Date header */}
+              <div style={{
+                fontSize:12, fontWeight:800, color:'#555',
+                textTransform:'uppercase', letterSpacing:'0.5px',
+                marginBottom:6, paddingLeft:2,
+              }}>
+                {fmtDate(date)}
+              </div>
+
+              {sessions.map(s => (
+                <button
+                  key={s.session_type}
+                  onClick={() => onGoToDate(date, s.session_type)}
+                  style={{
+                    display:'flex', alignItems:'center', width:'100%',
+                    backgroundColor:'#fff', borderRadius:12, padding:'12px 14px',
+                    marginBottom:8, border:`1.5px solid ${C.orange}44`,
+                    cursor:'pointer', textAlign:'left',
+                    boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
+                  }}
+                >
+                  {/* Session pill */}
+                  <div style={{
+                    backgroundColor: s.session_type==='Morning' ? '#fff8e1' : '#e8f4fd',
+                    color: s.session_type==='Morning' ? '#f57f17' : '#1565c0',
+                    borderRadius:8, padding:'4px 10px',
+                    fontSize:12, fontWeight:800, marginRight:12, flexShrink:0,
+                  }}>
+                    {s.session_type}
+                  </div>
+
+                  {/* Counts */}
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', gap:14 }}>
+                      <span style={{ fontSize:13, fontWeight:700, color:C.green }}>
+                        {s.present} present
+                      </span>
+                      <span style={{ fontSize:13, fontWeight:700, color:C.red }}>
+                        {s.absent} absent
+                      </span>
+                    </div>
+                    <div style={{ fontSize:11, color:'#888', marginTop:2 }}>
+                      {s.total} students total
+                    </div>
+                  </div>
+
+                  {/* Arrow */}
+                  <IconChevronRight size={18} color="#aaa" />
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Role badge ────────────────────────────────────────────────────────────
+const ROLE_BADGE: Record<string, { Icon: any; bg: string; fg: string }> = {
+  admin:  { Icon: IconCrown,     bg: C.gold,                  fg: C.green },
+  coach:  { Icon: IconUserCheck, bg: 'rgba(255,255,255,0.2)', fg: '#fff'  },
+  scorer: { Icon: IconTrophy,    bg: 'rgba(255,255,255,0.2)', fg: '#fff'  },
+};
+
+// ─── Students & fees tiles ───────────────────────────────────────────────────
+type Tile = { Icon: any; label: string; sub: string; path: string; slug: string; badge?: number };
+
+// ─── Main Menu (Home) ────────────────────────────────────────────────────────
+export default function MainMenu() {
+  const navigate = useNavigate();
+  const { can: canPerm, isLoaded: permsLoaded, roleLabel, isDataRestricted: restricted, isAnonymous: anon } = usePermissions();
+  const role    = (localStorage.getItem('user_role') || 'viewer').toLowerCase();
+
+  // "New data on server" badge — set by background status check, cleared on tap
+  const [hasNewData, setHasNewData] = useState(false);
+  const [syncing,    setSyncing]    = useState(false);
+  const [syncMsg,    setSyncMsg]    = useState('');
+  const syncMsgTimer = useRef<any>(null);
+
+  useEffect(() => {
+    const onNew = () => setHasNewData(true);
+    window.addEventListener('qca-new-data', onNew);
+    return () => window.removeEventListener('qca-new-data', onNew);
+  }, []);
+
+  const [duesCount,    setDuesCount]    = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [pendingItems, setPendingItems] = useState<any[]>([]);
+  const [showPending,  setShowPending]  = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (anon) return; // nothing signed-in to read — avoid pointless local DB queries
+    const [ov, pc, pi] = await Promise.all([
+      getPaymentOverview(),
+      getPendingUploadCount(),
+      getPendingByDateSession(),
+    ]);
+    setDuesCount(ov.studentsWithDues);
+    setPendingCount(pc);
+    setPendingItems(pi);
+  }, [anon]);
+
+  const doSync = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg('');
+    try {
+      const r = await runBackgroundSync();
+      const total = r.students + r.payments + r.attendance + r.writeoffs;
+      setSyncMsg(total > 0 ? `✅ ${total} record${total > 1 ? 's' : ''} updated` : '✅ Already up to date');
+      if (total > 0) { refresh(); setHasNewData(false); }
+    } catch {
+      setSyncMsg('⚠ Could not reach server');
+    } finally {
+      setSyncing(false);
+      clearTimeout(syncMsgTimer.current);
+      syncMsgTimer.current = setTimeout(() => setSyncMsg(''), 3000);
+    }
+  }, [syncing, refresh]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [refresh]);
+  useEffect(() => {
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [refresh]);
+
+  const goToDate = (date: string, session: string) => {
+    setShowPending(false);
+    navigate('/attendance', { state: { date, session } });
+  };
+
+  const STUDENT_TILES: Tile[] = [
+    { Icon: IconUsers,    label: 'Students',    sub: 'Roster & profiles',           path: 'students',  slug: 'student:view' },
+    { Icon: IconUserPlus, label: 'Add Student', sub: 'Register offline student',   path: 'addstudent', slug: 'student:add' },
+    { Icon: IconBell,     label: 'Reminders',
+      sub: duesCount > 0 ? `${duesCount} student${duesCount>1?'s':''} with fee dues` : 'Send payment reminders',
+      path: 'reminders', slug: 'payments:alerts' },
+    { Icon: IconNotes,    label: 'Remarks',     sub: 'Coach notes per student',     path: 'remarks',   slug: 'remarks:view' },
+    { Icon: IconTool,     label: 'Utilities',   sub: 'Reports & monitoring',        path: 'utilities', slug: 'utils:report' },
+  ];
+  // Public content — what an anonymous visitor sees instead of Students & fees
+  const PUBLIC_TILES: Tile[] = [
+    { Icon: IconNews,         label: 'Cricket Hub',   sub: 'AI news & coaching insights',        path: 'news',    slug: '' },
+    { Icon: IconTrophy,       label: 'Matches',       sub: 'Live scoring & results',             path: 'matches', slug: '' },
+    { Icon: IconPhoto,        label: 'Academy Pulse', sub: 'Daily photos, videos & moments',     path: 'pulse',   slug: '' },
+    { Icon: IconBrandYoutube, label: 'QCA Channel',   sub: 'Academy YouTube channel',            path: 'videos',  slug: '' },
+    { Icon: IconBook,         label: 'Library',       sub: 'Coaching videos & resources',        path: 'library', slug: '' },
+    { Icon: IconMail,         label: 'Contact Us',    sub: 'Enquiries, phone, WhatsApp, social', path: 'contact', slug: '' },
+  ];
+  const UTILS_SLUGS = ['utils:students','utils:attendance','utils:payments','utils:report','utils:inactive'];
+  const hasAnyUtils = !anon && permsLoaded && UTILS_SLUGS.some(s => canPerm(s));
+  const tiles = anon ? PUBLIC_TILES : (permsLoaded
+    ? STUDENT_TILES.filter(t => t.path === 'utilities' ? hasAnyUtils : canPerm(t.slug))
+    : STUDENT_TILES);
+
+  const badge = ROLE_BADGE[role] ?? { Icon: IconEye, bg: 'rgba(255,255,255,0.2)', fg: '#fff' };
+  const showAttendanceCta = !anon && (permsLoaded ? canPerm('attendance:view') : true);
+  const showStatusRow = !anon && !restricted;
+  const hasSyncAccess = !anon && (permsLoaded
+    ? ['sync:upload','sync:download','sync:students','sync:payments','sync:reupload','sync:runall'].some(canPerm)
+    : true);
+
+  // Announcements + Player of Month (visible to all users)
+  const [announcements,  setAnnouncements]  = React.useState<any[]>([]);
+  const [playerOfMonth,  setPlayerOfMonth]  = React.useState<any>(null);
+  const [annDismissed,   setAnnDismissed]   = React.useState<number[]>([]);
+
+  React.useEffect(() => {
+    const base2 = (localStorage.getItem('server_ip')||'').trim().replace(/\/+$/,'');
+    if (!base2) return;
+    const H2 = {
+      'X-Api-Key':  localStorage.getItem('secret_key')||'',
+      'X-Username': localStorage.getItem('auth_user')||'',
+      'X-Password': localStorage.getItem('auth_pass')||'',
+    };
+    // Announcements
+    fetch(`${base2}/api/data/announcements`, {headers:H2})
+      .then(r=>r.json())
+      .then(j=>{ if(j.announcements) setAnnouncements(j.announcements); })
+      .catch(()=>{});
+    // Player of month
+    const monthStr = new Date().toISOString().slice(0,7);
+    fetch(`${base2}/api/data/player-of-month?month=${monthStr}`, {headers:H2})
+      .then(r=>r.json())
+      .then(j=>{ if(j.player) setPlayerOfMonth(j.player); })
+      .catch(()=>{});
+  }, []);
+
+  // Birthday banner - once per day
+  const _todayKey = new Date().toISOString().slice(0,10);
+  const [bdayKids,      setBdayKids]      = React.useState<any[]>([]);
+  const [bdayDismissed, setBdayDismissed] = React.useState(
+    localStorage.getItem('bday_dismissed') === _todayKey
+  );
+  const dismissBday = () => {
+    localStorage.setItem('bday_dismissed', _todayKey);
+    setBdayDismissed(true);
+  };
+  React.useEffect(() => {
+    if (bdayDismissed) return;
+    const base = (localStorage.getItem('server_ip')||'').trim().replace(/\/+$/,'');
+    if (!base) return;
+    fetch(`${base}/api/data/utils/birthdays?month=0`, { headers: {
+      'X-Api-Key':  localStorage.getItem('secret_key')||'',
+      'X-Username': localStorage.getItem('auth_user')||'',
+      'X-Password': localStorage.getItem('auth_pass')||'',
+    }}).then(r=>r.json()).then(j=>{
+      if (j.today && j.today.length > 0) setBdayKids(j.today);
+    }).catch(()=>{});
+  }, [bdayDismissed]);
+
+  return (
+    <div style={S.page}>
+
+      ;

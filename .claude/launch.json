@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "qca-server",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "Set-Location C:\\qca_application; python -m uvicorn main:app --reload --host 0.0.0.0 --port 8045"],
+      "port": 8045
+    },
+    {
+      "name": "qca-app",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5173", "--host"],
+      "port": 5173
+    }
+  ]
+}

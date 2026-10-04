@@ -1,0 +1,61 @@
+
+/* Safe area for notch/status bar */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+/* Capacitor Android status bar compensation */
+.safe-top {
+  padding-top: max(44px, calc(20px + var(--sat)));
+}
+/* Global reset */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: sans-serif;
+  background-color: #f8f9fa;
+}
+
+/* SimpleLayout shell — sized to the *visible* viewport (dvh), so the
+   bottom nav and the last list items never sit behind Android's system
+   navigation bar. 100vh is the fallback for old WebViews without dvh. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+.app-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+/* Pages inside the shell were written with minHeight:100vh, which made
+   every page taller than the scroll area. Fill the area instead.
+   First child only: some pages render a fixed FAB as a sibling. */
+.app-scroll > :first-child {
+  min-height: 100% !important;
+}
+
+/* Spinner animation for SyncScreen */
+@keyframes spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+/* Native QR scanner overlay */
+body.scanner-active {
+  background: transparent !important;
+}
+body.scanner-active #root {
+  display: none;
+}
