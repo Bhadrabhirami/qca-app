@@ -4,9 +4,10 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { usePermissions, isDataRestricted, getLinkedStudentIds } from './usePermissions';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import ZoomableImage, { ZoomableVideo } from '../shared/ZoomableImage';
 import {
   getActiveStudents,
   insertPendingMedia,
@@ -20,7 +21,9 @@ import {
 } from '../database/db';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const C = { green:'#1a472a', gold:'#d4af37', bg:'#f4f7f6', border:'#e0e0e0', gray:'#888', red:'#c0392b', blue:'#2980b9' };
+const C = { green:'#1a472a', gold:'#d4af37', bg:'#f4f7f6', border:'#e8e8e8', gray:'#6b7280', red:'#c0392b', blue:'#2563eb', text:'#1f2937' };
+const CARD: React.CSSProperties = { backgroundColor:'#fff', borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden' };
+const TAG_COLORS: Record<string,string> = { Training:'#1a472a', Match:'#c0392b', Event:'#2563eb', Achievement:'#d97706', Other:'#6b7280' };
 const TAG_TYPES    = ['Training','Match','Event','Achievement','Other'];
 const MAX_BYTES    = 80 * 1024 * 1024;
 const PHOTO_MAX_PX = 1280;
@@ -72,7 +75,7 @@ function buildBase(ip: string) {
   const c = (ip||'').trim().replace(/\/+$/,'');
   return c.startsWith('http') ? c : `http://${c}`;
 }
-function hdrs() {
+function hdrs(): Record<string,string> {
   const jwt = localStorage.getItem('jwt_token');
   const exp = parseInt(localStorage.getItem('jwt_expiry') || '0');
   if (jwt && exp) {
@@ -83,18 +86,33 @@ function hdrs() {
     }
     return {'Content-Type':'application/json','Authorization':'Bearer '+jwt,'X-Username':localStorage.getItem('auth_user')||''};
   }
-  return {
-    'Content-Type': 'application/json',
-    'X-Username':   localStorage.getItem('auth_user') ?? '',
-    'X-Password':   localStorage.getItem('auth_pass') ?? '',
-  };
+  return { 'Content-Type': 'application/json', 'X-Username': localStorage.getItem('auth_user') ?? '' };
+}
+/** Small Cloudinary rendition for grids — a still frame for videos */
+function thumbUrl(url: string, isVideo: boolean, px = 360) {
+  if (!url || !url.includes('/upload/')) return url;
+  const u = url.replace('/upload/', `/upload/c_fill,w_${px},h_${px},q_auto${isVideo ? ',so_1' : ''}/`);
+  return isVideo ? u.replace(/\.[a-z0-9]+$/i, '.jpg') : u;
+}
+function Chip({ on, color = C.green, onClick, children }: { on:boolean; color?:string; onClick:()=>void; children:React.ReactNode }) {
+  return (
+    <button onClick={onClick} aria-pressed={on}
+      style={{ flexShrink:0, padding:'5px 11px', borderRadius:16, cursor:'pointer', fontSize:11.5, fontWeight:700, whiteSpace:'nowrap',
+        border:`1px solid ${on ? color : C.border}`, backgroundColor:on ? color : '#fff', color:on ? '#fff' : '#374151' }}>
+      {children}
+    </button>
+  );
 }
 function sName(students: any[], id: any) {
   const n = Number(id);
   return students.find(s => Number(s.id)===n)?.name ?? `QCA-${n}`;
 }
 function fmtSz(b: number) { return b > 1024*1024 ? `${(b/1024/1024).toFixed(1)} MB` : `${(b/1024).toFixed(0)} KB`; }
-function fmtDate(s: string) { return s?.slice(0,10) || '—'; }
+function fmtDate(s: string) {
+  if (!s) return '—';
+  const d = new Date(String(s).slice(0,10) + 'T00:00:00');
+  return isNaN(d.getTime()) ? String(s).slice(0,10) : d.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
+}
 
 function compressPhoto(file: Blob): Promise<Blob> {
   return new Promise((res, rej) => {
@@ -114,9 +132,9 @@ function compressPhoto(file: Blob): Promise<Blob> {
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 function SBadge({ s }: { s: string }) {
-  const m: Record<string,[string,string]> = { pending:[C.gold,'⏳ Pending'], cld_uploaded:[C.blue,'☁ Uploaded'], saved:['#27ae60','✔ Saved'], error:[C.red,'✖ Error'] };
+  const m: Record<string,[string,string]> = { pending:['#b45309','⏳ Waiting'], cld_uploaded:[C.blue,'☁ Half-done'], saved:['#166534','✔ Saved'], error:[C.red,'✖ Error'] };
   const [col,lbl] = m[s]||[C.gray,s];
-  return <span style={{ fontSize:11,fontWeight:700,padding:'3px 8px',borderRadius:10,backgroundColor:col+'20',color:col,border:`1px solid ${col}44` }}>{lbl}</span>;
+  return <span style={{ fontSize:10.5,fontWeight:800,padding:'2px 7px',borderRadius:8,backgroundColor:col+'18',color:col,whiteSpace:'nowrap' }}>{lbl}</span>;
 }
 
 // ─── Tag edit modal ───────────────────────────────────────────────────────────
@@ -127,7 +145,8 @@ function TagModal({ item, students, onSave, onClose }: { item:any; students:any[
   const [note,setNote]  = useState(item.coach_note||'');
   const [q,   setQ]     = useState('');
   const toggle = (id: any) => { const n=Number(id); setSel(p=>p.includes(n)?p.filter(x=>x!==n):[...p,n]); };
-  const filt = students.filter(s=>s.name.toLowerCase().includes(q.toLowerCase()) || s.regno?.toLowerCase().includes(q.toLowerCase()) || s.regno?.toLowerCase().includes(q.toLowerCase()));
+  const ql = q.toLowerCase();
+  const filt = students.filter(s=>s.name.toLowerCase().includes(ql) || String(s.regno||'').toLowerCase().includes(ql));
   return (
     <div onClick={onClose} style={{ position:'fixed',inset:0,zIndex:6000,backgroundColor:'rgba(0,0,0,0.7)',display:'flex',alignItems:'flex-end' }}>
       <div onClick={e=>e.stopPropagation()} style={{ backgroundColor:'#fff',width:'100%',maxHeight:'85vh',borderRadius:'20px 20px 0 0',overflowY:'auto',paddingBottom:30 }}>
@@ -150,7 +169,7 @@ function TagModal({ item, students, onSave, onClose }: { item:any; students:any[
             {filt.slice(0,60).map((s,i)=>{ const on=sel.includes(Number(s.id)); return (
               <button key={Number(s.id)} onClick={()=>toggle(s.id)} style={{ display:'flex',alignItems:'center',gap:10,width:'100%',padding:'9px 12px',background:on?C.green+'12':'none',border:'none',borderBottom:i<filt.length-1?`1px solid ${C.border}`:'none',cursor:'pointer',textAlign:'left' }}>
                 <div style={{ width:20,height:20,borderRadius:'50%',border:`2px solid ${on?C.green:'#ccc'}`,backgroundColor:on?C.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:12,flexShrink:0 }}>{on?'✔':''}</div>
-                <div><div style={{ fontSize:13,fontWeight:700,color:on?C.green:'#222' }}>{s.name}</div><div style={{ fontSize:11,color:C.gray }}>{s.level}</div></div>
+                <div><div style={{ fontSize:13,fontWeight:700,color:on?C.green:'#222' }}>{s.name}</div><div style={{ fontSize:11,color:C.gray }}>{[s.regno && String(s.regno).padStart(3,'0'), s.level].filter(Boolean).join(' · ')}</div></div>
               </button>
             );})}
           </div>
@@ -179,16 +198,19 @@ function PreviewModal({ item, students, onTag, onDelete, onClose }: {
   const fileName = blobFileName(item.id, item.video_mime || (item.resource_type==='video'?'video/webm':'image/jpeg'));
 
   useEffect(() => {
+    let created: string | null = null;
     opfsLoad(fileName).then(blob => {
       setLoading(false);
       if (blob) {
-        setBlobUrl(URL.createObjectURL(blob));
+        created = URL.createObjectURL(blob);
+        setBlobUrl(created);
         setFileInfo(`📁 ${fileName} · ${fmtSz(blob.size)}`);
       } else {
         setFileInfo(`⚠ File not in device storage: ${fileName}`);
       }
     });
-    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+    return () => { if (created) URL.revokeObjectURL(created); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const validIds = (item.student_ids||[]).map(Number).filter((n:number)=>!isNaN(n)&&n>0);
@@ -247,7 +269,7 @@ function PreviewModal({ item, students, onTag, onDelete, onClose }: {
           {/* Actions */}
           <div style={{ display:'flex',gap:8 }}>
             <button onClick={onClose} style={{ flex:1,padding:'11px 0',borderRadius:10,border:'1px solid #333',backgroundColor:'transparent',color:'#aaa',fontWeight:700,fontSize:13,cursor:'pointer' }}>Close</button>
-            <button onClick={()=>onTag(item)} style={{ flex:2,padding:'11px 0',borderRadius:10,border:'none',backgroundColor:C.blue,color:'#fff',fontWeight:700,fontSize:13,cursor:'pointer' }}>✏ Tag Students</button>
+            <button onClick={()=>onTag(item)} style={{ flex:2,padding:'11px 0',borderRadius:10,border:'none',backgroundColor:C.gold,color:C.green,fontWeight:800,fontSize:13,cursor:'pointer' }}>✏ Tag Students</button>
             <button onClick={()=>onDelete(item)} style={{ padding:'11px 14px',borderRadius:10,border:`1px solid ${C.red}44`,backgroundColor:'transparent',color:C.red,fontWeight:700,fontSize:13,cursor:'pointer' }}>🗑</button>
           </div>
         </div>
@@ -471,20 +493,33 @@ function CaptureTab({ onCaptured, navState }: { onCaptured:(id:number)=>void; na
   const isPre = mode==='photo_pre'||mode==='video_pre';
 
   return (
-    <div style={{ padding:'14px 16px 140px' }}>
-      {mode==='idle' && (
-        <div style={{ display:'flex',gap:8,marginBottom:14 }}>
-          <button onClick={startPhoto} style={{ ...CB('#27ae60'),flex:1 }}>📷 Photo</button>
-          <button onClick={startVideo} style={{ ...CB(C.blue),flex:1 }}>🎥 Video</button>
-          {/* Gallery button — label wraps input for reliable Android tap */}
-          <div style={{ ...CB('#8e44ad') as any, flex:1, position:'relative', overflow:'hidden' }}>
-            <span style={{pointerEvents:'none'}}>🖼 Gallery</span>
-            <input ref={galRef} type="file" accept="image/*,video/*"
-              onChange={onGalleryWeb}
-              style={{position:'absolute',top:0,left:0,width:'100%',height:'100%',opacity:0.01,cursor:'pointer'}}/>
+    <div style={{ padding:'10px 10px 24px' }}>
+      {mode==='idle' && (<>
+        {navState?.student_id && (
+          <div style={{ ...CARD, padding:'7px 12px', marginBottom:8, fontSize:12, color:C.green, fontWeight:700 }}>
+            🏷 Will be tagged to the student you came from — you can change it before upload
+          </div>
+        )}
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:10 }}>
+          {[{ icon:'📷', label:'Photo', on:startPhoto }, { icon:'🎥', label:'Video', on:startVideo }].map(b => (
+            <button key={b.label} onClick={b.on} style={{ ...CARD, padding:'12px 4px', cursor:'pointer',
+              display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+              <span style={{ fontSize:22 }}>{b.icon}</span>
+              <span style={{ fontSize:12, fontWeight:800, color:C.green }}>{b.label}</span>
+            </button>
+          ))}
+          {/* From phone — the input covers the tile for a reliable Android tap */}
+          <div style={{ ...CARD, padding:'12px 4px', position:'relative', display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+            <span style={{ fontSize:22, pointerEvents:'none' }}>🖼</span>
+            <span style={{ fontSize:12, fontWeight:800, color:C.green, pointerEvents:'none' }}>From phone</span>
+            <input ref={galRef} type="file" accept="image/*,video/*" onChange={onGalleryWeb} aria-label="Pick from phone"
+              style={{ position:'absolute', inset:0, width:'100%', height:'100%', opacity:0.01, cursor:'pointer' }}/>
           </div>
         </div>
-      )}
+        <div style={{ fontSize:11.5, color:C.gray, textAlign:'center', lineHeight:1.5 }}>
+          Capture now — it's kept on this phone. Tag students and upload later from the ☁ Sync tab.
+        </div>
+      </>)}
 
       {mode==='photo_live' && (
         <div style={{ marginBottom:14 }}>
@@ -504,7 +539,7 @@ function CaptureTab({ onCaptured, navState }: { onCaptured:(id:number)=>void; na
               <div style={{ position:'absolute',top:10,left:12,display:'flex',alignItems:'center',gap:6,backgroundColor:'rgba(0,0,0,0.65)',borderRadius:8,padding:'4px 10px' }}>
                 <div style={{ width:8,height:8,borderRadius:'50%',backgroundColor:C.red }} />
                 <span style={{ color:'#fff',fontSize:12,fontWeight:800 }}>{String(Math.floor(recSecs/60)).padStart(2,'0')}:{String(recSecs%60).padStart(2,'0')}</span>
-                <span style={{ color:'rgba(255,255,255,0.6)',fontSize:11 }}>{fmtSz(recBytes)}/5MB</span>
+                <span style={{ color:'rgba(255,255,255,0.6)',fontSize:11 }}>{fmtSz(recBytes)}/{fmtSz(MAX_BYTES)}</span>
               </div>
               <div style={{ position:'absolute',bottom:54,left:0,right:0,height:4,backgroundColor:'rgba(0,0,0,0.3)' }}>
                 <div style={{ width:`${Math.min(100,recBytes/MAX_BYTES*100)}%`,height:'100%',backgroundColor:recBytes>MAX_BYTES*0.8?C.red:C.gold }} />
@@ -538,11 +573,13 @@ function CaptureTab({ onCaptured, navState }: { onCaptured:(id:number)=>void; na
           <div style={{ fontSize:12,color:'#666',lineHeight:1.5 }}>Settings → Apps → QCA → Permissions → Camera: Allow · Microphone: Allow</div>
         </div>
       ) : msg ? (
-        <div style={{ padding:'10px 14px',borderRadius:10,marginBottom:12,fontSize:13,fontWeight:600,backgroundColor:msg.startsWith('✔')?'#e8f5e9':'#fdecea',color:msg.startsWith('✔')?'#27ae60':C.red }}>{msg}</div>
+        <div style={{ padding:'8px 12px',borderRadius:10,marginBottom:10,fontSize:12.5,fontWeight:700,
+          backgroundColor:msg.startsWith('✔')?'#e8f5e9':msg.startsWith('⚠')||msg.startsWith('🔒')?'#fdecea':'#f0f4f0',
+          color:msg.startsWith('✔')?'#166534':msg.startsWith('⚠')||msg.startsWith('🔒')?C.red:C.green }}>{msg}</div>
       ) : null}
 
       {isPre && (
-        <button onClick={doSave} disabled={saving} style={{ width:'100%',padding:16,borderRadius:13,border:'none',backgroundColor:saving?'#ccc':C.green,color:'#fff',fontWeight:800,fontSize:15,cursor:saving?'not-allowed':'pointer' }}>
+        <button onClick={doSave} disabled={saving} style={{ width:'100%',padding:11,borderRadius:11,border:'none',backgroundColor:saving?'#ccc':C.green,color:saving?'#fff':C.gold,fontWeight:900,fontSize:14,cursor:saving?'not-allowed':'pointer' }}>
           {saving ? '⏳ Saving…' : '💾 Save Now — Tag & Upload Later'}
         </button>
       )}
@@ -574,89 +611,63 @@ function StorageInspector({ items, onClose }: { items: any[]; onClose: ()=>void 
     pendingMap[fn] = i;
   });
 
+  const pct = estimate && estimate.quota ? Math.min(100, estimate.usage / estimate.quota * 100) : 0;
   return (
-    <div onClick={onClose} style={{ position:'fixed',inset:0,zIndex:6000,backgroundColor:'rgba(0,0,0,0.85)',display:'flex',alignItems:'flex-end' }}>
-      <div onClick={e=>e.stopPropagation()} style={{ backgroundColor:'#0d1f14',width:'100%',maxHeight:'85vh',borderRadius:'20px 20px 0 0',overflowY:'auto',paddingBottom:30 }}>
-        {/* Header */}
-        <div style={{ padding:'16px 18px',borderRadius:'20px 20px 0 0',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:'1px solid #1a3a22' }}>
+    <div onClick={onClose} style={{ position:'fixed',inset:0,zIndex:6000,backgroundColor:'rgba(0,0,0,0.55)',display:'flex',alignItems:'flex-end' }}>
+      <div onClick={e=>e.stopPropagation()} style={{ backgroundColor:C.bg,width:'100%',maxHeight:'85vh',borderRadius:'16px 16px 0 0',overflowY:'auto',paddingBottom:24 }}>
+        <div style={{ backgroundColor:C.green,padding:'12px 14px',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
           <div>
-            <div style={{ color:'#fff',fontWeight:800,fontSize:16 }}>📦 OPFS Storage Inspector</div>
-            <div style={{ color:'#4caf77',fontSize:11,marginTop:2 }}>Origin Private File System — app internal only</div>
+            <div style={{ color:'#fff',fontWeight:800,fontSize:15 }}>📦 Files on this phone</div>
+            <div style={{ color:'rgba(255,255,255,0.7)',fontSize:11,marginTop:1 }}>Captured media waiting to upload</div>
           </div>
-          <button onClick={onClose} style={{ background:'none',border:'none',color:'rgba(255,255,255,0.6)',fontSize:22,cursor:'pointer' }}>✕</button>
+          <button onClick={onClose} aria-label="Close" style={{ background:'none',border:'none',color:'rgba(255,255,255,0.85)',fontSize:20,cursor:'pointer' }}>✕</button>
         </div>
 
-        <div style={{ padding:'14px 16px 0' }}>
-          {/* Storage quota */}
+        <div style={{ padding:10, display:'flex', flexDirection:'column', gap:8 }}>
           {estimate && (
-            <div style={{ backgroundColor:'#111',borderRadius:10,padding:'10px 14px',marginBottom:14 }}>
-              <div style={{ color:'#888',fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:6 }}>Device Storage</div>
-              <div style={{ display:'flex',justifyContent:'space-between',marginBottom:4 }}>
-                <span style={{ color:'#aaa',fontSize:12 }}>Used by app</span>
-                <span style={{ color:'#4caf77',fontSize:12,fontWeight:700 }}>{fmtSz(estimate.usage)}</span>
+            <div style={{ ...CARD, padding:'9px 12px' }}>
+              <div style={{ display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:6 }}>
+                <span style={{ color:C.gray }}>App storage used</span>
+                <span><b style={{ color:C.green }}>{fmtSz(estimate.usage)}</b> <span style={{ color:C.gray }}>of {fmtSz(estimate.quota)}</span></span>
               </div>
-              <div style={{ display:'flex',justifyContent:'space-between',marginBottom:8 }}>
-                <span style={{ color:'#aaa',fontSize:12 }}>Available quota</span>
-                <span style={{ color:'#aaa',fontSize:12 }}>{fmtSz(estimate.quota)}</span>
-              </div>
-              <div style={{ height:6,backgroundColor:'#222',borderRadius:3,overflow:'hidden' }}>
-                <div style={{ width:`${Math.min(100, estimate.usage/estimate.quota*100)}%`,height:'100%',backgroundColor:'#27ae60',borderRadius:3 }}/>
+              <div style={{ height:5,backgroundColor:'#e5e7eb',borderRadius:3,overflow:'hidden' }}>
+                <div style={{ width:`${pct}%`,height:'100%',backgroundColor:C.green }}/>
               </div>
             </div>
           )}
 
-          {/* How to access note */}
-          <div style={{ backgroundColor:'#111',borderRadius:10,padding:'10px 14px',marginBottom:14,borderLeft:`3px solid ${C.gold}` }}>
-            <div style={{ color:C.gold,fontSize:11,fontWeight:700,marginBottom:4 }}>ℹ How to access these files</div>
-            <div style={{ color:'#888',fontSize:11,lineHeight:1.6 }}>
-              OPFS is sandboxed inside the app — not accessible from Android file manager or USB.<br/>
-              Files are auto-deleted after successful Cloudinary upload.<br/>
-              To inspect manually: use Chrome DevTools → Application → Storage → OPFS<br/>
-              (connect phone via USB with USB debugging enabled)
-            </div>
+          <div style={{ fontSize:11.5, color:C.gray, lineHeight:1.5, padding:'0 2px' }}>
+            Files live in the app's private storage (not visible in the phone's file manager) and are deleted automatically once uploaded.
           </div>
 
-          {/* File list */}
-          <div style={{ color:'#888',fontSize:10,fontWeight:700,textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:8 }}>
-            Media Files in OPFS ({opfsFiles.length})
+          <div style={{ fontSize:10.5,fontWeight:800,color:C.gray,textTransform:'uppercase',letterSpacing:'0.8px',margin:'4px 2px 0' }}>
+            Files ({opfsFiles.length})
           </div>
-
-          {loading && <div style={{ color:'#555',textAlign:'center',padding:20 }}>Scanning storage…</div>}
-
+          {loading && <div style={{ color:C.gray,textAlign:'center',padding:16,fontSize:13 }}>Scanning storage…</div>}
           {!loading && opfsFiles.length === 0 && (
-            <div style={{ color:'#555',textAlign:'center',padding:20,fontSize:12 }}>
-              No media files in OPFS.<br/>Files are saved here after capture and deleted after upload.
+            <div style={{ ...CARD, color:C.gray,textAlign:'center',padding:16,fontSize:12.5 }}>No media files waiting on this phone.</div>
+          )}
+          {opfsFiles.length > 0 && (
+            <div style={CARD}>
+              {opfsFiles.map((f, i) => {
+                const linked = pendingMap[f.name];
+                return (
+                  <div key={f.name} style={{ padding:'8px 12px', borderTop: i ? `1px solid ${C.border}` : 'none',
+                    boxShadow:`inset 3px 0 0 ${linked ? C.gold : '#d1d5db'}` }}>
+                    <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',gap:8 }}>
+                      <span style={{ fontFamily:'monospace',fontSize:11.5,color:C.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{f.name}</span>
+                      <span style={{ fontSize:11,color:C.gray,flexShrink:0 }}>{fmtSz(f.size)}</span>
+                    </div>
+                    <div style={{ fontSize:11,marginTop:2,color: linked ? '#92400e' : C.gray }}>
+                      {linked
+                        ? `Queued #${linked.id} · ${linked.tag_type||'Training'} · ${linked.status} · ${fmtDate(linked.attendance_date||linked.created_at)}`
+                        : 'Orphaned — no queue entry'}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
-
-          {opfsFiles.map(f => {
-            const linked = pendingMap[f.name];
-            return (
-              <div key={f.name} style={{ backgroundColor:'#111',borderRadius:10,padding:'10px 14px',marginBottom:8,borderLeft:`3px solid ${linked?C.gold:'#333'}` }}>
-                {/* Filename */}
-                <div style={{ fontFamily:'monospace',fontSize:12,color:'#4caf77',marginBottom:4,wordBreak:'break-all' }}>
-                  {f.name}
-                </div>
-                <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center' }}>
-                  <span style={{ fontSize:11,color:'#555' }}>{fmtSz(f.size)}</span>
-                  {linked ? (
-                    <span style={{ fontSize:10,backgroundColor:C.gold+'22',color:C.gold,padding:'2px 8px',borderRadius:6,fontWeight:700 }}>
-                      Pending #{linked.id} · {linked.tag_type||'Training'}
-                    </span>
-                  ) : (
-                    <span style={{ fontSize:10,backgroundColor:'#333',color:'#555',padding:'2px 8px',borderRadius:6 }}>
-                      Orphaned (no DB row)
-                    </span>
-                  )}
-                </div>
-                {linked && (
-                  <div style={{ fontSize:10,color:'#555',marginTop:3 }}>
-                    Status: {linked.status} · {fmtDate(linked.attendance_date||linked.created_at)}
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
@@ -691,7 +702,7 @@ function SyncTab({ students, onSynced }: { students:any[]; onSynced:()=>void }) 
     await updatePendingMediaTags(tagItem.id, ids.map(Number), tag, note);
     setTagItem(null); await reload();
     // Refresh preview if it's the same item
-    if(preview?.id===tagItem.id) setPreview(prev=>prev?{...prev,student_ids:ids,tag_type:tag,coach_note:note}:null);
+    if(preview?.id===tagItem.id) setPreview((prev:any)=>prev?{...prev,student_ids:ids,tag_type:tag,coach_note:note}:null);
   };
 
   const runSync = async () => {
@@ -747,75 +758,90 @@ function SyncTab({ students, onSynced }: { students:any[]; onSynced:()=>void }) 
     addLog('■ Done'); setRunning(false); onSynced();
   };
 
-  const pending=items.filter(i=>i.status!=='saved').length;
-  const errors =items.filter(i=>i.status==='error').length;
+  const pending   = items.filter(i=>i.status!=='saved').length;
+  const errors    = items.filter(i=>i.status==='error').length;
+  const untagged  = items.filter(i=>i.status!=='saved' && !(i.student_ids||[]).map(Number).some((n:number)=>n>0)).length;
+  const cell = (n: number, label: string, color: string, first?: boolean) => (
+    <div style={{ flex:1, padding:'7px 4px', textAlign:'center', borderLeft: first ? 'none' : `1px solid ${C.border}` }}>
+      <div style={{ fontSize:16, fontWeight:900, color: n > 0 ? color : '#c0c4cc' }}>{n}</div>
+      <div style={{ fontSize:9.5, fontWeight:700, color:C.gray, textTransform:'uppercase', letterSpacing:'0.4px' }}>{label}</div>
+    </div>
+  );
 
   return (
     <>
-    <div style={{ padding:'14px 16px 100px' }}>
-      {/* Stats */}
-      <div style={{ display:'flex',gap:8,marginBottom:12 }}>
-        {([['Pending',items.filter(i=>i.status==='pending').length,C.gold],['Uploaded',items.filter(i=>i.status==='cld_uploaded').length,C.blue],['Error',errors,C.red]] as any[]).map(([l,v,c]:any)=>(
-          <div key={l} style={{ flex:1,backgroundColor:'#fff',borderRadius:10,padding:'10px 8px',textAlign:'center',boxShadow:'0 1px 3px rgba(0,0,0,0.08)',borderTop:`3px solid ${c}` }}>
-            <div style={{ fontSize:22,fontWeight:900,color:c }}>{v}</div>
-            <div style={{ fontSize:10,color:C.gray,fontWeight:700 }}>{l}</div>
-          </div>
-        ))}
+    <div style={{ padding:10, display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={CARD}>
+        <div style={{ display:'flex' }}>
+          {cell(items.filter(i=>i.status==='pending').length, 'Waiting', '#b45309', true)}
+          {cell(items.filter(i=>i.status==='cld_uploaded').length, 'Half-done', C.blue)}
+          {cell(untagged, 'Untagged', '#b45309')}
+          {cell(errors, 'Errors', C.red)}
+        </div>
       </div>
 
-      {log.length>0 && (
-        <div ref={logRef} style={{ backgroundColor:'#080e0a',borderRadius:10,padding:'10px 14px',fontFamily:'monospace',fontSize:11,color:'#6b8f73',maxHeight:130,overflowY:'auto',marginBottom:12 }}>
-          {log.map((l,i)=><div key={i} style={{ marginBottom:2,color:l.includes('✔')?'#4caf77':l.includes('✖')?C.red:l.includes('⚠')?C.gold:'#6b8f73' }}>{l}</div>)}
+      <div style={{ display:'flex', gap:8 }}>
+        <button onClick={runSync} disabled={running||pending===0} style={{ flex:1, padding:11, borderRadius:11, border:'none',
+          backgroundColor: running ? '#9ca3af' : pending===0 ? '#e8f5e9' : C.green,
+          color: running ? '#fff' : pending===0 ? '#166534' : C.gold, fontWeight:900, fontSize:14,
+          cursor: running||pending===0 ? 'not-allowed' : 'pointer' }}>
+          {running ? '⏳ Uploading…' : pending===0 ? '✔ All uploaded' : `☁ Upload ${pending} item${pending>1?'s':''}`}
+        </button>
+        <button onClick={()=>setShowStorage(true)} aria-label="Files on this phone" style={{ flexShrink:0, padding:'0 12px', borderRadius:11,
+          border:`1px solid ${C.border}`, backgroundColor:'#fff', color:C.green, fontWeight:700, fontSize:12, cursor:'pointer' }}>📦 Files</button>
+      </div>
+      {untagged > 0 && !running && (
+        <div style={{ fontSize:11.5, color:'#92400e', padding:'0 2px' }}>
+          ⚠ {untagged} item{untagged>1?'s have':' has'} no students — tap to tag before uploading (untagged items still upload)
         </div>
       )}
 
-      <div style={{ display:'flex',gap:8,marginBottom:12 }}>
-        <button onClick={runSync} disabled={running||pending===0} style={{ flex:3,padding:14,borderRadius:12,border:'none',backgroundColor:running?'#ccc':pending===0?'#e8f5e9':C.green,color:pending===0?'#27ae60':'#fff',fontWeight:800,fontSize:14,cursor:running||pending===0?'not-allowed':'pointer' }}>
-          {running?'⏳ Uploading…':pending===0?'✔ All synced':`▶ Upload ${pending} item${pending>1?'s':''}`}
-        </button>
-        <button onClick={()=>setShowStorage(true)} style={{ flex:1,padding:14,borderRadius:12,border:`1px solid ${C.border}`,backgroundColor:'#fff',color:C.green,fontWeight:700,fontSize:12,cursor:'pointer' }}>
-          📦 Files
-        </button>
-      </div>
-
-      {/* Hint */}
-      {pending>0 && <div style={{ fontSize:12,color:C.gray,textAlign:'center',marginBottom:10 }}>Tap any item to preview, verify and tag students</div>}
+      {log.length>0 && (
+        <div ref={logRef} style={{ ...CARD, padding:'8px 12px', fontFamily:'monospace', fontSize:11, maxHeight:140, overflowY:'auto', backgroundColor:'#f9fafb' }}>
+          {log.map((l,i)=><div key={i} style={{ marginBottom:2, color:l.includes('✔')?'#166534':l.includes('✖')?C.red:l.includes('⚠')?'#b45309':C.gray }}>{l}</div>)}
+        </div>
+      )}
 
       {items.length===0 ? (
-        <div style={{ textAlign:'center',padding:'40px 0',color:C.gray }}><div style={{ fontSize:40 }}>📭</div><div style={{ marginTop:8 }}>Nothing queued</div></div>
-      ) : items.map(item=>{
-        const vIds=(item.student_ids||[]).map(Number).filter((n:number)=>!isNaN(n)&&n>0);
-        return (
-          <button key={item.id} onClick={()=>setPreview(item)} style={{ display:'block',width:'100%',backgroundColor:'#fff',borderRadius:12,padding:'12px 14px',marginBottom:10,boxShadow:'0 1px 4px rgba(0,0,0,0.08)',borderLeft:`4px solid ${item.status==='error'?C.red:item.status==='cld_uploaded'?C.blue:C.gold}`,border:`none`,cursor:'pointer',textAlign:'left' }}>
-            <div style={{ borderLeft:`4px solid ${item.status==='error'?C.red:item.status==='cld_uploaded'?C.blue:C.gold}`,paddingLeft:10,marginLeft:-10,paddingBottom:1 }}>
-            <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6 }}>
-              <div style={{ display:'flex',alignItems:'center',gap:8 }}>
-                <span style={{ fontSize:20 }}>{item.resource_type==='video'?'🎥':'📷'}</span>
-                <div>
-                  <div style={{ fontWeight:700,fontSize:13 }}>{item.tag_type||'Training'} · {fmtDate(item.attendance_date||item.created_at)}</div>
-                  <div style={{ fontSize:11,color:C.gray }}>{fmtSz(item.file_size_bytes)} · tap to preview</div>
+        <div style={{ ...CARD, padding:'26px 16px', textAlign:'center', color:C.gray }}>
+          <div style={{ fontSize:30 }}>📭</div>
+          <div style={{ fontWeight:800, fontSize:13.5, color:C.text, marginTop:6 }}>Nothing waiting</div>
+          <div style={{ fontSize:12, marginTop:3 }}>Captured photos and videos appear here until uploaded</div>
+        </div>
+      ) : (
+        <div style={CARD}>
+          {items.map((item, i) => {
+            const vIds = (item.student_ids||[]).map(Number).filter((n:number)=>!isNaN(n)&&n>0);
+            const edge = item.status==='error' ? C.red : item.status==='cld_uploaded' ? C.blue : vIds.length ? C.gold : '#b45309';
+            return (
+              <button key={item.id} onClick={()=>setPreview(item)} style={{ display:'block', width:'100%', padding:'9px 12px', background:'none', border:'none',
+                borderTop: i ? `1px solid ${C.border}` : 'none', boxShadow:`inset 3px 0 0 ${edge}`, cursor:'pointer', textAlign:'left' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+                  <span style={{ fontSize:18, width:24, textAlign:'center' }}>{item.resource_type==='video'?'🎥':'📷'}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:800, fontSize:13, color:C.text }}>
+                      {item.tag_type||'Training'} <span style={{ fontWeight:600, color:C.gray }}>· {fmtDate(item.attendance_date||item.created_at)} · {fmtSz(item.file_size_bytes)}</span>
+                    </div>
+                    <div style={{ fontSize:11.5, marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                      color: vIds.length ? C.green : '#b45309', fontWeight:700 }}>
+                      {vIds.length ? vIds.map((id:number)=>sName(students,id)).join(', ') : '⚠ No students — tap to tag'}
+                    </div>
+                    {item.error_msg && <div style={{ fontSize:11, color:C.red, marginTop:2 }}>⚠ {item.error_msg}</div>}
+                  </div>
+                  <SBadge s={item.status} />
                 </div>
-              </div>
-              <SBadge s={item.status} />
-            </div>
-            <div style={{ display:'flex',flexWrap:'wrap',gap:4 }}>
-              {vIds.length===0
-                ? <span style={{ fontSize:11,color:C.red,fontWeight:600 }}>⚠ No students — tap to tag</span>
-                : vIds.map((id:number)=><span key={id} style={{ fontSize:11,backgroundColor:'#f0f4f0',color:C.green,padding:'2px 8px',borderRadius:8,fontWeight:600 }}>{sName(students,id)}</span>)
-              }
-            </div>
-            {item.error_msg&&<div style={{ fontSize:11,color:C.red,marginTop:4 }}>⚠ {item.error_msg}</div>}
-            </div>
-          </button>
-        );
-      })}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
 
     {preview && (
       <PreviewModal
         item={preview} students={students}
         onTag={item=>{setTagItem(item);}}
-        onDelete={item=>{if(confirm('Remove this item from device?')) removeItem(item);}}
+        onDelete={item=>{if(confirm('Remove this item from the phone? It has not been uploaded.')) removeItem(item);}}
         onClose={()=>setPreview(null)}
       />
     )}
@@ -921,306 +947,168 @@ function HistoryTab({ students }: { students: any[] }) {
   const photos = filtered.filter(i=>i.file_type==='Photo').length;
   const videos = filtered.filter(i=>i.file_type==='Video').length;
 
-  const M = {
-    navy:'#001f3f', green:'#1a472a', gold:'#c5a059',
-    bg:'#f0f4f1', border:'#e5e7eb', muted:'#6b7280',
-  };
+  const [viewer,     setViewer]     = useState<any|null>(null);
+  const [showCustom, setShowCustom] = useState(false);
+  const RANGES = [7, 15, 30, 90];
+  const activeDays = RANGES.find(d => from === ago(d) && to === today);
+  const isDefault  = activeDays === 7 && fType === 'all' && !search;
+  const resetAll   = () => { setFrom(ago(7)); setTo(today); setFType('all'); setSearch(''); setShowCustom(false); };
+  const cell = (n: number, label: string, first?: boolean) => (
+    <div style={{ flex:1, padding:'6px 4px', textAlign:'center', borderLeft: first ? 'none' : `1px solid ${C.border}` }}>
+      <div style={{ fontSize:15, fontWeight:900, color:C.green }}>{n}</div>
+      <div style={{ fontSize:9.5, fontWeight:700, color:C.gray, textTransform:'uppercase', letterSpacing:'0.4px' }}>{label}</div>
+    </div>
+  );
+  const vIdx = viewer ? filtered.findIndex(i => i.media_id === viewer.media_id) : -1;
+  const tagOf = (item: any) => item.students?.[0]?.tag_type || item.tag_type || 'Training';
 
   return (
-    <div style={{ backgroundColor:M.bg, minHeight:'100%', paddingBottom:80 }}>
+    <div style={{ padding:10, display:'flex', flexDirection:'column', gap:8 }}>
 
-      {/* ── Filter panel ── */}
-      <div style={{ backgroundColor:'#fff', borderBottom:`1px solid ${M.border}`,
-        padding:'14px 16px' }}>
-
-        {/* Date range pickers */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, marginBottom:10 }}>
-          <div>
-            <div style={{ fontSize:10,fontWeight:800,color:M.muted,
-              textTransform:'uppercase' as const,letterSpacing:'0.5px',marginBottom:4 }}>From</div>
-            <input type="date" value={from} max={to}
-              onChange={e => setFrom(e.target.value)}
-              style={{ width:'100%',padding:'9px 10px',borderRadius:10,
-                border:`1.5px solid ${M.border}`,fontSize:13,outline:'none',
-                boxSizing:'border-box' as const }} />
+      {/* ── Filters ── */}
+      <div style={{ ...CARD, padding:10, display:'flex', flexDirection:'column', gap:7 }}>
+        <div style={{ display:'flex', gap:5, overflowX:'auto', scrollbarWidth:'none' }}>
+          {RANGES.map(d => (
+            <Chip key={d} on={activeDays === d && !showCustom} onClick={() => { setShowCustom(false); setFrom(ago(d)); setTo(today); }}>{d} days</Chip>
+          ))}
+          <Chip on={showCustom || !activeDays} onClick={() => setShowCustom(v => !v)}>Custom</Chip>
+        </div>
+        {(showCustom || !activeDays) && (
+          <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+            <input type="date" value={from} max={to} aria-label="From date" onChange={e => setFrom(e.target.value)}
+              style={{ flex:1, minWidth:0, padding:'6px 8px', borderRadius:8, border:`1px solid ${C.border}`, fontSize:13 }} />
+            <span style={{ color:C.gray, fontSize:12 }}>→</span>
+            <input type="date" value={to} min={from} max={today} aria-label="To date" onChange={e => setTo(e.target.value)}
+              style={{ flex:1, minWidth:0, padding:'6px 8px', borderRadius:8, border:`1px solid ${C.border}`, fontSize:13 }} />
           </div>
-          <div>
-            <div style={{ fontSize:10,fontWeight:800,color:M.muted,
-              textTransform:'uppercase' as const,letterSpacing:'0.5px',marginBottom:4 }}>To</div>
-            <input type="date" value={to} min={from} max={today}
-              onChange={e => setTo(e.target.value)}
-              style={{ width:'100%',padding:'9px 10px',borderRadius:10,
-                border:`1.5px solid ${M.border}`,fontSize:13,outline:'none',
-                boxSizing:'border-box' as const }} />
+        )}
+        <div style={{ display:'flex', gap:3, padding:3, borderRadius:8, backgroundColor:'#f3f4f6' }}>
+          {([['all','All'],['Photo','📷 Photos'],['Video','🎥 Videos']] as const).map(([k,l]) => (
+            <button key={k} onClick={() => setFType(k)} aria-pressed={fType === k}
+              style={{ flex:1, height:26, borderRadius:6, border:'none', cursor:'pointer', fontSize:11.5, fontWeight:700,
+                backgroundColor: fType === k ? '#fff' : 'transparent', color: fType === k ? C.green : C.gray,
+                boxShadow: fType === k ? '0 1px 2px rgba(0,0,0,0.12)' : 'none' }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ position:'relative' }}>
+          <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', fontSize:13 }}>🔍</span>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Student name or note…" aria-label="Search student name or note"
+            style={{ width:'100%', padding:'7px 30px', borderRadius:8, border:`1px solid ${C.border}`, fontSize:13, outline:'none', boxSizing:'border-box', backgroundColor:'#fff' }} />
+          {search && <button onClick={() => setSearch('')} aria-label="Clear search" style={{ position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
+            background:'none', border:'none', cursor:'pointer', fontSize:14, color:C.gray }}>✕</button>}
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ padding:'8px 12px', borderRadius:10, fontSize:12.5, fontWeight:700,
+          backgroundColor: msg.startsWith('✔') ? '#dcfce7' : '#fee2e2',
+          border: `1px solid ${msg.startsWith('✔') ? '#86efac' : '#fca5a5'}`,
+          color: msg.startsWith('✔') ? '#166534' : '#dc2626' }}>{msg}</div>
+      )}
+      {restricted && linkedIds.length===0 && (
+        <div style={{ padding:'8px 12px', borderRadius:10, backgroundColor:'#fef3c7', border:'1px solid #fcd34d', fontSize:12, fontWeight:700, color:'#92400e' }}>
+          ⚠ Account not linked to a student — contact the academy
+        </div>
+      )}
+
+      {/* ── Summary ── */}
+      {fetched && filtered.length > 0 && (
+        <div style={CARD}>
+          <div style={{ display:'flex' }}>{cell(filtered.length,'Items',true)}{cell(photos,'Photos')}{cell(videos,'Videos')}</div>
+          <div style={{ display:'flex', justifyContent:'space-between', padding:'5px 10px', borderTop:`1px solid ${C.border}`,
+            fontSize:11, color:C.gray, backgroundColor:'#fafafa' }}>
+            <span>{fmtDate(from)} – {fmtDate(to)}{filtered.length < items.length ? ` · ${items.length} in range` : ''}</span>
+            {!isDefault && <button onClick={resetAll} style={{ background:'none', border:'none', padding:0, color:C.green, fontWeight:800, fontSize:11, cursor:'pointer' }}>Reset filters</button>}
           </div>
         </div>
+      )}
 
-        {/* Quick range chips — 7d default */}
-        <div style={{ display:'flex',gap:6,marginBottom:10 }}>
-          {([
-            { label:'7d',  days:7  },
-            { label:'15d', days:15 },
-            { label:'30d', days:30 },
-            { label:'90d', days:90 },
-          ]).map(({label,days}) => {
-            const f = ago(days);
-            const active = from===f && to===today;
+      {loading && !fetched && <div style={{ textAlign:'center', padding:'32px 0', color:C.gray, fontSize:13 }}>Loading…</div>}
+      {fetched && filtered.length===0 && (
+        <div style={{ ...CARD, padding:'26px 16px', textAlign:'center', color:C.gray }}>
+          <div style={{ fontSize:30, marginBottom:6 }}>🔍</div>
+          <div style={{ fontWeight:800, fontSize:13.5, color:C.text }}>Nothing found</div>
+          <div style={{ fontSize:12, marginTop:3 }}>Try a wider date range or clear the filters</div>
+          {!isDefault && <button onClick={resetAll} style={{ marginTop:10, padding:'7px 16px', borderRadius:9, border:'none',
+            backgroundColor:C.green, color:'#fff', fontWeight:800, fontSize:12, cursor:'pointer' }}>Reset filters</button>}
+        </div>
+      )}
+
+      {/* ── Grid ── */}
+      {filtered.length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:4, opacity: loading ? 0.5 : 1 }}>
+          {filtered.map(item => {
+            const isVid = item.file_type === 'Video';
+            const n = (item.students||[]).length;
+            const tg = tagOf(item);
             return (
-              <button key={label} onClick={() => { setFrom(f); setTo(today); }}
-                style={{ padding:'5px 14px',borderRadius:20,border:'none',
-                  cursor:'pointer',fontSize:11,fontWeight:800,
-                  backgroundColor:active ? M.green : '#f3f4f6',
-                  color:active ? '#fff' : M.muted,
-                  boxShadow:active?'0 2px 6px rgba(26,71,42,0.3)':'none' }}>
-                {label}
+              <button key={item.media_id} onClick={() => setViewer(item)} aria-label={`${tg} ${isVid ? 'video' : 'photo'}`}
+                style={{ position:'relative', width:'100%', padding:'100% 0 0 0', border:'none', borderRadius:8, overflow:'hidden',
+                  backgroundColor:'#1f2937', cursor:'pointer' }}>
+                {item.secure_url && <img src={thumbUrl(item.secure_url, isVid)} alt="" loading="lazy"
+                  style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover' }} />}
+                {isVid && <span style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <span style={{ width:28, height:28, borderRadius:'50%', backgroundColor:'rgba(0,0,0,0.55)', color:'#fff', fontSize:11,
+                    display:'flex', alignItems:'center', justifyContent:'center', paddingLeft:2 }}>▶</span></span>}
+                <span style={{ position:'absolute', left:4, bottom:4, padding:'1px 6px', borderRadius:6, fontSize:9, fontWeight:800, color:'#fff',
+                  backgroundColor:(TAG_COLORS[tg] || C.gray) + 'e6' }}>{tg}</span>
+                <span style={{ position:'absolute', right:4, top:4, padding:'1px 6px', borderRadius:6, fontSize:9, fontWeight:800, color:'#fff',
+                  backgroundColor: n ? 'rgba(0,0,0,0.55)' : 'rgba(180,83,9,0.9)' }}>👤 {n}</span>
               </button>
             );
           })}
-          {/* Custom badge if not a preset */}
-          {![7,15,30,90].some(d=>ago(d)===from&&to===today) && from!==today && (
-            <span style={{ padding:'5px 10px',borderRadius:20,
-              backgroundColor:'#e0e7ff',color:'#3730a3',
-              fontSize:10,fontWeight:700 }}>Custom</span>
-          )}
-        </div>
-
-        {/* Type filter chips */}
-        <div style={{ display:'flex',gap:6,marginBottom:10 }}>
-          {([
-            { key:'all',   label:'All Types', icon:'' },
-            { key:'Photo', label:'Photos',    icon:'📷' },
-            { key:'Video', label:'Videos',    icon:'🎥' },
-          ] as const).map(t => (
-            <button key={t.key} onClick={() => setFType(t.key)}
-              style={{ padding:'5px 14px',borderRadius:20,border:'none',
-                cursor:'pointer',fontSize:11,fontWeight:800,
-                backgroundColor:fType===t.key ? M.navy : '#f3f4f6',
-                color:fType===t.key ? '#fff' : M.muted }}>
-              {t.icon} {t.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Search bar */}
-        <div style={{ position:'relative' }}>
-          <span style={{ position:'absolute',left:11,top:'50%',
-            transform:'translateY(-50%)',fontSize:14,color:M.muted }}>🔍</span>
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search student name or note…"
-            style={{ width:'100%',padding:'9px 12px 9px 32px',borderRadius:10,
-              border:`1.5px solid ${M.border}`,fontSize:13,outline:'none',
-              boxSizing:'border-box' as const,backgroundColor:'#f9fafb' }} />
-          {search && (
-            <button onClick={() => setSearch('')} style={{ position:'absolute',
-              right:10,top:'50%',transform:'translateY(-50%)',
-              background:'none',border:'none',cursor:'pointer',
-              fontSize:15,color:M.muted }}>✕</button>
-          )}
-        </div>
-      </div>
-
-      {/* ── Action bar ── */}
-      <div style={{ display:'flex',gap:8,padding:'12px 16px 0' }}>
-        <button onClick={load} disabled={loading}
-          style={{ flex:2,padding:'11px',borderRadius:11,border:'none',
-            backgroundColor:loading ? '#9ca3af' : M.green,
-            color:'#fff',fontWeight:800,fontSize:13,
-            cursor:loading?'not-allowed':'pointer',
-            boxShadow:loading?'none':'0 2px 8px rgba(26,71,42,0.3)' }}>
-          {loading ? '⏳ Loading…' : '🔍 Search Gallery'}
-        </button>
-        <button onClick={() => {
-            setFrom(ago(7)); setTo(today);
-            setFType('all'); setSearch('');
-            setItems([]); setFetched(false);
-          }}
-          style={{ flex:1,padding:'11px',borderRadius:11,
-            border:`1px solid ${M.border}`,
-            backgroundColor:'#fff',color:M.muted,
-            fontWeight:700,fontSize:12,cursor:'pointer' }}>
-          Reset
-        </button>
-      </div>
-
-      {/* ── Status message ── */}
-      {msg && (
-        <div style={{ margin:'10px 16px 0',padding:'10px 14px',borderRadius:11,
-          fontSize:13,fontWeight:700,
-          backgroundColor:msg.startsWith('✔') ? '#dcfce7':'#fee2e2',
-          border:`1px solid ${msg.startsWith('✔')?'#86efac':'#fca5a5'}`,
-          color:msg.startsWith('✔') ? '#166534':'#dc2626' }}>
-          {msg}
         </div>
       )}
 
-      {/* ── Summary stats (when results loaded) ── */}
-      {fetched && filtered.length > 0 && (
-        <div style={{ display:'flex',gap:8,padding:'12px 16px 4px' }}>
-          <div style={{ flex:1,backgroundColor:'#fff',borderRadius:12,padding:'10px',
-            textAlign:'center' as const,border:`1px solid ${M.border}`,
-            boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
-            <div style={{ fontWeight:900,fontSize:20,color:M.green }}>{filtered.length}</div>
-            <div style={{ fontSize:9,color:M.muted,fontWeight:700,
-              textTransform:'uppercase' as const,letterSpacing:'0.5px' }}>Total</div>
+      {/* ── Viewer ── */}
+      {viewer && (
+        <div onClick={() => setViewer(null)} role="dialog" aria-label="Media viewer"
+          style={{ position:'fixed', inset:0, zIndex:5000, backgroundColor:'rgba(0,0,0,0.94)', display:'flex', flexDirection:'column',
+            paddingTop:'env(safe-area-inset-top)', paddingBottom:'env(safe-area-inset-bottom)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 12px' }}>
+            <button onClick={() => setViewer(null)} aria-label="Close"
+              style={{ background:'rgba(255,255,255,0.12)', border:'none', color:'#fff', fontSize:16, borderRadius:8, padding:'6px 11px', cursor:'pointer' }}>✕</button>
+            <span style={{ flex:1, color:'rgba(255,255,255,0.6)', fontSize:12, textAlign:'center' }}>{vIdx + 1} / {filtered.length}</span>
+            {can('media:upload') && (
+              <button onClick={() => { setRetag({ ...viewer, student_ids:(viewer.students||[]).map((t:any) => Number(t.student_id)) }); setViewer(null); }}
+                style={{ background:C.gold, border:'none', borderRadius:8, padding:'6px 10px', color:C.green, fontWeight:800, fontSize:12, cursor:'pointer' }}>✏ Re-tag</button>
+            )}
+            {can('media:delete') && (
+              <button onClick={async () => { await del(viewer); setViewer(null); }} aria-label="Delete"
+                style={{ background:'rgba(220,38,38,0.85)', border:'none', borderRadius:8, padding:'6px 10px', color:'#fff', fontWeight:800, fontSize:12, cursor:'pointer' }}>🗑</button>
+            )}
           </div>
-          <div style={{ flex:1,backgroundColor:'#fff',borderRadius:12,padding:'10px',
-            textAlign:'center' as const,border:`1px solid ${M.border}`,
-            boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
-            <div style={{ fontWeight:900,fontSize:20,color:'#0369a1' }}>{photos}</div>
-            <div style={{ fontSize:9,color:M.muted,fontWeight:700,
-              textTransform:'uppercase' as const,letterSpacing:'0.5px' }}>📷 Photos</div>
+          <div onClick={e => e.stopPropagation()} style={{ flex:1, minHeight:0, display:'flex', alignItems:'center', justifyContent:'center', padding:'0 8px' }}>
+            {viewer.file_type === 'Video'
+              ? <ZoomableVideo key={viewer.media_id} src={viewer.secure_url} poster={thumbUrl(viewer.secure_url, true, 720)} style={{ borderRadius:10 }} />
+              : <ZoomableImage src={viewer.secure_url} style={{ borderRadius:10 }} />}
           </div>
-          <div style={{ flex:1,backgroundColor:'#fff',borderRadius:12,padding:'10px',
-            textAlign:'center' as const,border:`1px solid ${M.border}`,
-            boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
-            <div style={{ fontWeight:900,fontSize:20,color:'#7c3aed' }}>{videos}</div>
-            <div style={{ fontSize:9,color:M.muted,fontWeight:700,
-              textTransform:'uppercase' as const,letterSpacing:'0.5px' }}>🎥 Videos</div>
-          </div>
-        </div>
-      )}
-
-      {/* Results count */}
-      {fetched && (
-        <div style={{ padding:'6px 16px 8px',fontSize:12,color:M.muted }}>
-          {filtered.length} of {items.length} item{items.length!==1?'s':''}
-          {search && ` · "${search}"`}
-          {fType!=='all' && ` · ${fType}s only`}
-        </div>
-      )}
-
-      {/* ── Empty states ── */}
-      {!fetched && !loading && (
-        <div style={{ textAlign:'center',padding:'48px 20px',color:M.muted }}>
-          <div style={{ fontSize:48,marginBottom:12 }}>📂</div>
-          <div style={{ fontWeight:800,fontSize:15,color:'#111',marginBottom:6 }}>Media Gallery</div>
-          <div style={{ fontSize:13,lineHeight:1.7,color:M.muted }}>
-            Showing last 7 days by default.<br/>
-            Use quick chips or date range to explore further.
-          </div>
-          {restricted && linkedIds.length===0 && (
-            <div style={{ marginTop:16,padding:'12px 14px',borderRadius:11,
-              backgroundColor:'#fef3c7',border:'1px solid #fcd34d',
-              fontSize:12,fontWeight:700,color:'#92400e' }}>
-              ⚠ Account not linked — contact admin
+          <div onClick={e => e.stopPropagation()} style={{ padding:'10px 14px 14px', color:'#fff' }}>
+            <div style={{ fontSize:12, color:'rgba(255,255,255,0.65)' }}>
+              {[tagOf(viewer), fmtDate(viewer.upload_date || viewer.created_at)].join(' · ')}
             </div>
-          )}
-        </div>
-      )}
-      {fetched && filtered.length===0 && (
-        <div style={{ textAlign:'center',padding:'40px 20px',color:M.muted }}>
-          <div style={{ fontSize:40,marginBottom:8 }}>🔍</div>
-          <div style={{ fontWeight:800,fontSize:15,color:'#111',marginBottom:6 }}>No media found</div>
-          <div style={{ fontSize:13 }}>Try a wider date range or clear filters</div>
-          <button onClick={() => { setSearch(''); setFType('all'); }}
-            style={{ marginTop:12,padding:'8px 20px',borderRadius:20,border:'none',
-              backgroundColor:M.navy,color:M.gold,fontWeight:700,
-              fontSize:12,cursor:'pointer' }}>
-            Clear Filters
-          </button>
-        </div>
-      )}
-
-      {/* ── Media grid ── */}
-      <div style={{ padding:'4px 16px 0' }}>
-        {filtered.map(item => (
-          <div key={item.media_id} style={{ backgroundColor:'#fff',borderRadius:16,
-            marginBottom:14,boxShadow:'0 2px 12px rgba(0,0,0,0.07)',overflow:'hidden',
-            border:`1px solid ${M.border}` }}>
-
-            {/* Media preview */}
-            {item.file_type==='Photo' && item.secure_url && (
-              <div style={{ position:'relative' }}>
-                <img src={item.secure_url} alt=""
-                  style={{ width:'100%',height:210,objectFit:'cover',display:'block' }} />
-                <div style={{ position:'absolute',top:10,left:10,
-                  backgroundColor:'rgba(0,0,0,0.55)',borderRadius:8,
-                  padding:'3px 10px',fontSize:11,fontWeight:800,color:'#fff' }}>
-                  📷 Photo
-                </div>
-              </div>
-            )}
-            {item.file_type==='Video' && item.secure_url && (
-              <div style={{ position:'relative' }}>
-                <video src={item.secure_url} controls playsInline
-                  style={{ width:'100%',height:210,objectFit:'cover',
-                    display:'block',backgroundColor:'#000' }} />
-                <div style={{ position:'absolute',top:10,left:10,
-                  backgroundColor:'rgba(0,0,0,0.55)',borderRadius:8,
-                  padding:'3px 10px',fontSize:11,fontWeight:800,color:'#fff' }}>
-                  🎥 Video
-                </div>
-              </div>
-            )}
-
-            {/* Info section */}
-            <div style={{ padding:'12px 14px 14px' }}>
-              {/* Header row */}
-              <div style={{ display:'flex',justifyContent:'space-between',
-                alignItems:'center',marginBottom:8 }}>
-                <div>
-                  <div style={{ fontWeight:800,fontSize:14,color:'#111' }}>
-                    {item.students?.[0]?.tag_type || item.tag_type || 'Training'}
-                  </div>
-                  <div style={{ fontSize:11,color:M.muted,marginTop:2 }}>
-                    {fmtDate(item.upload_date || item.created_at)}
-                  </div>
-                </div>
-                {item.description && (
-                  <div style={{ fontSize:11,color:M.muted,maxWidth:130,
-                    overflow:'hidden',textOverflow:'ellipsis',
-                    whiteSpace:'nowrap' as const,
-                    backgroundColor:'#f3f4f6',padding:'3px 8px',borderRadius:6 }}>
-                    {item.description}
-                  </div>
-                )}
-              </div>
-
-              {/* Student tags */}
-              <div style={{ display:'flex',flexWrap:'wrap' as const,gap:5,marginBottom:12 }}>
-                {(item.students||[]).length===0
-                  ? <span style={{ fontSize:11,color:M.muted,fontStyle:'italic' }}>
-                      No students tagged
-                    </span>
-                  : (item.students||[]).map((t:any) => (
-                      <span key={t.student_id} style={{ fontSize:11,
-                        backgroundColor:'#f0fdf4',color:M.green,
-                        padding:'3px 10px',borderRadius:20,fontWeight:700,
-                        border:'1px solid #86efac' }}>
-                        {t.name || `QCA-${t.student_id}`}
-                      </span>
-                    ))
-                }
-              </div>
-
-              {/* Action buttons */}
-              {can('media:upload') && (
-                <div style={{ display:'flex',gap:8 }}>
-                  <button
-                    onClick={() => setRetag({
-                      ...item,
-                      student_ids:(item.students||[]).map((t:any) => Number(t.student_id))
-                    })}
-                    style={{ flex:1,padding:'9px',borderRadius:10,
-                      border:`1px solid ${M.navy}33`,
-                      backgroundColor:`${M.navy}08`,
-                      color:M.navy,fontWeight:700,fontSize:12,cursor:'pointer' }}>
-                    ✏ Re-tag
-                  </button>
-                  {can('media:delete') && (
-                    <button onClick={() => del(item)}
-                      style={{ flex:1,padding:'9px',borderRadius:10,
-                        border:'1px solid #fca5a5',backgroundColor:'#fee2e2',
-                        color:'#dc2626',fontWeight:700,fontSize:12,cursor:'pointer' }}>
-                      🗑 Delete
-                    </button>
-                  )}
-                </div>
-              )}
+            {viewer.description && <div style={{ fontSize:13.5, marginTop:4 }}>{viewer.description}</div>}
+            <div style={{ display:'flex', flexWrap:'wrap', gap:4, marginTop:8 }}>
+              {(viewer.students||[]).length === 0
+                ? <span style={{ fontSize:12, color:'#fbbf24' }}>⚠ No students tagged</span>
+                : (viewer.students||[]).map((t:any) => (
+                    <span key={t.student_id} style={{ fontSize:11.5, fontWeight:700, padding:'2px 9px', borderRadius:10,
+                      backgroundColor:'rgba(255,255,255,0.12)', color:'#fff' }}>{t.name || `QCA-${t.student_id}`}</span>
+                  ))}
+            </div>
+            <div style={{ display:'flex', gap:8, marginTop:10 }}>
+              <button disabled={vIdx <= 0} onClick={() => setViewer(filtered[vIdx - 1])}
+                style={{ flex:1, padding:'9px', borderRadius:9, border:'1px solid rgba(255,255,255,0.2)', background:'rgba(255,255,255,0.08)',
+                  color: vIdx <= 0 ? 'rgba(255,255,255,0.3)' : '#fff', fontWeight:700, fontSize:13, cursor: vIdx <= 0 ? 'default' : 'pointer' }}>‹ Previous</button>
+              <button disabled={vIdx >= filtered.length - 1} onClick={() => setViewer(filtered[vIdx + 1])}
+                style={{ flex:1, padding:'9px', borderRadius:9, border:'none',
+                  background: vIdx >= filtered.length - 1 ? 'rgba(255,255,255,0.08)' : C.gold,
+                  color: vIdx >= filtered.length - 1 ? 'rgba(255,255,255,0.3)' : C.green, fontWeight:800, fontSize:13,
+                  cursor: vIdx >= filtered.length - 1 ? 'default' : 'pointer' }}>Next ›</button>
             </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
       {retag && (
         <TagModal item={{...retag,student_ids:retag.student_ids||[]}}
@@ -1233,7 +1121,6 @@ function HistoryTab({ students }: { students: any[] }) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function MediaScreen() {
-  const navigate=useNavigate();
   const location=useLocation();
   const { can } = usePermissions();
   const navState = location.state as any;
@@ -1252,55 +1139,23 @@ export default function MediaScreen() {
     ...(can('media:upload') ? [[`sync`,`☁ Sync${total>0?' ('+total+')':''}`] as [string,string]] : []),
     ['history','📂 Gallery'],
   ];
+  const subtitle = total === 0
+    ? 'Session photos & videos, tagged to students'
+    : `${total} waiting to upload${counts.error ? ` · ${counts.error} with errors` : ''}`;
 
   return (
-    <div style={{ backgroundColor:C.bg,minHeight:'100vh',fontFamily:'sans-serif',paddingBottom:40 }}>
-
-      {/* ── Header (pinned): title + tabs ── */}
-      <ScreenHeader title="📷 Media Centre" subtitle="Photos · Videos · Session Gallery"
-        background={`linear-gradient(135deg,#001f3f 0%,${C.green} 100%)`}
-        actions={total>0 ? (
-          <div style={{ backgroundColor:'#c0392b',color:'#fff',borderRadius:20,
-            padding:'4px 10px',fontSize:12,fontWeight:800,marginRight:8,
-            boxShadow:'0 2px 8px rgba(192,57,43,0.5)' }}>
-            {total} pending
-          </div>
-        ) : undefined}>
+    <div style={{ backgroundColor:C.bg,minHeight:'100%',fontFamily:'sans-serif',color:C.text,paddingBottom:24 }}>
+      <ScreenHeader title="Media Centre" subtitle={subtitle}>
         <HeaderTabs value={tab} onChange={k=>setTab(k as any)} tabs={TABS.map(([id,label])=>({id,label}))} />
       </ScreenHeader>
 
-      {/* Stats — scroll away under the pinned header */}
-      <div style={{ background:`linear-gradient(135deg,#001f3f 0%,${C.green} 100%)`,paddingBottom:6 }}>
-        <div style={{ display:'flex',gap:0,padding:'2px 16px 0' }}>
-          {[
-            { label:'Pending',  value:counts.pending,      color:'#f59e0b' },
-            { label:'Uploaded', value:counts.cld_uploaded, color:'#3b82f6' },
-            { label:'Saved',    value:counts.saved,        color:'#22c55e' },
-            { label:'Errors',   value:counts.error,        color:C.red     },
-          ].map((s,i)=>(
-            <div key={s.label} style={{ flex:1,textAlign:'center' as const,
-              padding:'8px 4px',
-              borderRight:i<3?'1px solid rgba(255,255,255,0.1)':'none' }}>
-              <div style={{ color:s.value>0?s.color:'rgba(255,255,255,0.3)',
-                fontWeight:900,fontSize:18 }}>{s.value}</div>
-              <div style={{ color:'rgba(255,255,255,0.45)',fontSize:9,
-                fontWeight:700,textTransform:'uppercase' as const,
-                letterSpacing:'0.5px',marginTop:1 }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Content ── */}
-      <div style={{ backgroundColor:C.bg }}>
-        {tab==='capture' && <CaptureTab navState={navState} onCaptured={()=>{refresh();setTab('sync');}}/>}
-        {tab==='sync'    && <SyncTab students={students} onSynced={refresh}/>}
-        {tab==='history' && <HistoryTab students={students}/>}
-      </div>
+      {tab==='capture' && <CaptureTab navState={navState} onCaptured={()=>{refresh();setTab('sync');}}/>}
+      {tab==='sync'    && <SyncTab students={students} onSynced={refresh}/>}
+      {tab==='history' && <HistoryTab students={students}/>}
     </div>
   );
 }
 
 function CB(color: string): React.CSSProperties {
-  return { flex:1,padding:'14px 8px',borderRadius:12,border:`1.5px solid ${color}44`,cursor:'pointer',backgroundColor:color+'18',color,fontWeight:800,fontSize:13 };
+  return { flex:1,padding:'11px 8px',borderRadius:11,border:'none',cursor:'pointer',backgroundColor:color,color:'#fff',fontWeight:800,fontSize:13.5 };
 }

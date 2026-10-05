@@ -17,16 +17,16 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import ZoomableImage, { ZoomableVideo } from '../shared/ZoomableImage';
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 const C = {
-  navy: '#001f3f', gold: '#c5a059', green: '#1a472a',
-  red: '#c0392b', blue: '#2563eb', purple: '#7c3aed',
-  bg: '#f0f2f5', card: '#fff', border: '#e5e7eb', muted: '#6b7280',
+  gold: '#d4af37', green: '#1a472a', red: '#c0392b', blue: '#2563eb',
+  bg: '#f4f7f6', card: '#fff', border: '#e8e8e8', muted: '#6b7280', text: '#1f2937',
 };
+const CARD: React.CSSProperties = { backgroundColor: C.card, borderRadius: 12, border: `1px solid ${C.border}`, overflow: 'hidden' };
 
 const TAG_TYPES   = ['Training', 'Match', 'Event', 'Achievement', 'Other'];
 const TAG_COLORS: Record<string, string> = {
@@ -43,7 +43,7 @@ function bld(ip: string) {
   const h = (ip || '').trim().replace(/\/+$/, '');
   return h.startsWith('http') ? h : `http://${h}`;
 }
-function hdr() {
+function hdr(): Record<string, string> {
   const jwt = localStorage.getItem('jwt_token');
   const exp = parseInt(localStorage.getItem('jwt_expiry') || '0');
   if (jwt && exp) {
@@ -54,11 +54,15 @@ function hdr() {
     }
     return {'Content-Type':'application/json','Authorization':'Bearer '+jwt,'X-Username':localStorage.getItem('auth_user')||''};
   }
-  return {
-    'Content-Type': 'application/json',
-    'X-Username':   localStorage.getItem('auth_user') ?? '',
-    'X-Password':   localStorage.getItem('auth_pass') ?? '',
-  };
+  return { 'Content-Type': 'application/json', 'X-Username': localStorage.getItem('auth_user') ?? '' };
+}
+
+/** Small Cloudinary rendition for grids — a still frame for videos (≈20 KB instead of the full file) */
+function thumbUrl(url: string, rtype: string, px = 360) {
+  if (!url || !url.includes('/upload/')) return url;
+  const t = `c_fill,w_${px},h_${px},q_auto${rtype === 'video' ? ',so_1' : ''}`;
+  const u = url.replace('/upload/', `/upload/${t}/`);
+  return rtype === 'video' ? u.replace(/\.[a-z0-9]+$/i, '.jpg') : u;
 }
 function fmtSz(b: number) {
   return b > 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB`
@@ -360,52 +364,42 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
   };
 
   return (
-    <div style={{ padding: '16px 16px 120px' }}>
+    <div style={{ padding: '10px 10px 24px' }}>
 
       {/* Camera controls */}
       {mode === 'idle' && (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          <button onClick={startPhoto}
-            style={{ flex: 1, padding: '14px 8px', borderRadius: 12,
-              border: `1.5px solid ${C.green}44`, cursor: 'pointer',
-              backgroundColor: C.green + '14', color: C.green,
-              fontWeight: 800, fontSize: 13 }}>
-            📷 Photo
-          </button>
-          <button onClick={startVideo}
-            style={{ flex: 1, padding: '14px 8px', borderRadius: 12,
-              border: `1.5px solid ${C.blue}44`, cursor: 'pointer',
-              backgroundColor: C.blue + '14', color: C.blue,
-              fontWeight: 800, fontSize: 13 }}>
-            🎥 Video
-          </button>
-          <label style={{ flex: 1, padding: '14px 8px', borderRadius: 12,
-            border: `1.5px solid ${C.purple}44`, cursor: 'pointer',
-            backgroundColor: C.purple + '14', color: C.purple,
-            fontWeight: 800, fontSize: 13, textAlign: 'center' as const,
-            display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            🖼 Gallery
-            <input type="file" accept="image/*,video/*"
-              onChange={onGallery} style={{ display: 'none' }} />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 10 }}>
+          {[{ icon: '📷', label: 'Photo', on: startPhoto }, { icon: '🎥', label: 'Video', on: startVideo }].map(b => (
+            <button key={b.label} onClick={b.on} style={{ ...CARD, padding: '12px 4px', cursor: 'pointer',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+              <span style={{ fontSize: 22 }}>{b.icon}</span>
+              <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>{b.label}</span>
+            </button>
+          ))}
+          <label style={{ ...CARD, padding: '12px 4px', cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <span style={{ fontSize: 22 }}>🖼</span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: C.green }}>From phone</span>
+            <input type="file" accept="image/*,video/*" onChange={onGallery} style={{ display: 'none' }} />
           </label>
         </div>
       )}
 
       {/* Live photo preview */}
       {mode === 'photo_live' && (
-        <div style={{ marginBottom: 14 }}>
+        <div style={{ marginBottom: 10 }}>
           <video ref={phRef} muted playsInline autoPlay
             style={{ width: '100%', borderRadius: 14, maxHeight: 340,
               objectFit: 'cover', backgroundColor: '#000' }} />
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             <button onClick={snapPhoto}
-              style={{ flex: 2, padding: 14, borderRadius: 12, border: 'none',
+              style={{ flex: 2, padding: 11, borderRadius: 11, border: 'none',
                 backgroundColor: C.green, color: '#fff', fontWeight: 800,
                 fontSize: 15, cursor: 'pointer' }}>
               📸 Snap
             </button>
             <button onClick={retake}
-              style={{ flex: 1, padding: 14, borderRadius: 12,
+              style={{ flex: 1, padding: 11, borderRadius: 11,
                 border: `1px solid ${C.border}`, backgroundColor: '#fff',
                 color: C.muted, fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
               ✕
@@ -445,16 +439,16 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             {recRef.current?.state !== 'recording'
               ? <button onClick={startRec}
-                  style={{ flex: 2, padding: 14, borderRadius: 12, border: 'none',
+                  style={{ flex: 2, padding: 11, borderRadius: 11, border: 'none',
                     backgroundColor: C.red, color: '#fff', fontWeight: 800,
                     fontSize: 14, cursor: 'pointer' }}>⏺ Record</button>
               : <button onClick={stopRec}
-                  style={{ flex: 2, padding: 14, borderRadius: 12, border: 'none',
+                  style={{ flex: 2, padding: 11, borderRadius: 11, border: 'none',
                     backgroundColor: C.red, color: '#fff', fontWeight: 800,
                     fontSize: 14, cursor: 'pointer' }}>⏹ Stop</button>
             }
             <button onClick={retake}
-              style={{ flex: 1, padding: 14, borderRadius: 12,
+              style={{ flex: 1, padding: 11, borderRadius: 11,
                 border: `1px solid ${C.border}`, backgroundColor: '#fff',
                 color: C.muted, fontWeight: 700, cursor: 'pointer' }}>✕</button>
           </div>
@@ -490,20 +484,21 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
       )}
 
       {/* Message */}
-      {msg && (
-        <div style={{ padding: '10px 14px', borderRadius: 10, marginBottom: 12,
-          fontSize: 13, fontWeight: 700,
-          backgroundColor: msg.startsWith('✅') ? '#dcfce7' : '#fee2e2',
-          color: msg.startsWith('✅') ? '#166534' : C.red,
-          border: `1px solid ${msg.startsWith('✅') ? '#86efac' : '#fca5a5'}` }}>
-          {msg}
-        </div>
-      )}
+      {msg && (() => {
+        const ok = msg.startsWith('✅'), busy = !ok && !msg.startsWith('⚠') && !msg.startsWith('🔒');
+        return (
+          <div style={{ padding: '8px 12px', borderRadius: 10, marginBottom: 10, fontSize: 12.5, fontWeight: 700,
+            backgroundColor: ok ? '#dcfce7' : busy ? '#f0f4f0' : '#fee2e2',
+            color: ok ? '#166534' : busy ? C.green : C.red,
+            border: `1px solid ${ok ? '#86efac' : busy ? '#cfe3d5' : '#fca5a5'}` }}>
+            {msg}
+          </div>
+        );
+      })()}
 
       {/* Upload form — shown after capture/gallery selection */}
       {isPre && (
-        <div style={{ backgroundColor: C.card, borderRadius: 16, padding: '16px',
-          border: `1px solid ${C.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+        <div style={{ ...CARD, padding: 12 }}>
 
           {/* Caption */}
           <div style={{ fontSize: 11, fontWeight: 800, color: C.muted,
@@ -512,7 +507,7 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
           </div>
           <input value={caption} onChange={e => setCaption(e.target.value)}
             placeholder="Describe this moment…" maxLength={200}
-            style={{ ...F, marginBottom: 12 }} />
+            style={{ ...F, marginBottom: 10 }} />
 
           {/* Tag type */}
           <div style={{ fontSize: 11, fontWeight: 800, color: C.muted,
@@ -521,12 +516,11 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, marginBottom: 12 }}>
             {TAG_TYPES.map(t => (
-              <button key={t} onClick={() => setTagType(t)}
-                style={{ padding: '6px 14px', borderRadius: 20, border: 'none',
-                  cursor: 'pointer', fontSize: 12, fontWeight: 700,
-                  backgroundColor: tagType === t ? TAG_COLORS[t] : '#f3f4f6',
-                  color: tagType === t ? '#fff' : C.muted,
-                  boxShadow: tagType === t ? '0 2px 6px rgba(0,0,0,0.2)' : 'none' }}>
+              <button key={t} onClick={() => setTagType(t)} aria-pressed={tagType === t}
+                style={{ padding: '5px 11px', borderRadius: 16, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                  border: `1px solid ${tagType === t ? TAG_COLORS[t] : C.border}`,
+                  backgroundColor: tagType === t ? TAG_COLORS[t] : '#fff',
+                  color: tagType === t ? '#fff' : '#374151' }}>
                 {t}
               </button>
             ))}
@@ -549,9 +543,9 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
                 textTransform: 'uppercase' as const, letterSpacing: '0.5px' }}>
                 Highlight
               </div>
-              <button onClick={() => setHighlight(h => !h)}
-                style={{ fontSize: 28, background: 'none', border: 'none',
-                  cursor: 'pointer', padding: '4px' }}>
+              <button onClick={() => setHighlight(h => !h)} aria-pressed={highlight} aria-label="Mark as highlight"
+                style={{ fontSize: 24, background: 'none', border: 'none',
+                  cursor: 'pointer', padding: '2px 4px' }}>
                 {highlight ? '⭐' : '☆'}
               </button>
             </div>
@@ -559,10 +553,9 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
 
           {/* Upload button */}
           <button onClick={doUpload} disabled={uploading}
-            style={{ width: '100%', padding: 16, borderRadius: 13, border: 'none',
-              backgroundColor: uploading ? '#9ca3af' : C.navy, color: C.gold,
-              fontWeight: 900, fontSize: 15, cursor: uploading ? 'not-allowed' : 'pointer',
-              boxShadow: uploading ? 'none' : `0 4px 14px ${C.navy}44` }}>
+            style={{ width: '100%', padding: 11, borderRadius: 11, border: 'none',
+              backgroundColor: uploading ? '#9ca3af' : C.green, color: uploading ? '#fff' : C.gold,
+              fontWeight: 900, fontSize: 14, cursor: uploading ? 'not-allowed' : 'pointer' }}>
             {uploading ? '⏳ Uploading…' : '🌟 Publish to Academy Pulse'}
           </button>
         </div>
@@ -574,8 +567,55 @@ function CaptureTab({ base, onUploaded }: { base: string; onUploaded: () => void
 // ── Gallery Tab ───────────────────────────────────────────────────────────────
 // Quick range presets
 type RangePreset = 'today' | '7d' | '15d' | '30d' | '90d' | 'custom';
+const PRESETS: { key: RangePreset; label: string }[] = [
+  { key: 'today', label: 'Today' }, { key: '7d', label: '7 days' }, { key: '15d', label: '15 days' },
+  { key: '30d', label: '30 days' }, { key: '90d', label: '90 days' }, { key: 'custom', label: 'Custom' },
+];
+function presetRange(p: RangePreset): [string, string] | null {
+  const td = today();
+  if (p === 'today') return [td, td];
+  if (p === '7d')    return [ago(7), td];
+  if (p === '15d')   return [ago(15), td];
+  if (p === '30d')   return [ago(30), td];
+  if (p === '90d')   return [ago(90), td];
+  return null;   // custom — keep current dates
+}
 
-function GalleryTab({ base }: { base: string }) {
+function Chip({ on, color = C.green, onClick, children }: { on: boolean; color?: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} aria-pressed={on}
+      style={{ flexShrink: 0, padding: '5px 11px', borderRadius: 16, cursor: 'pointer', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap',
+        border: `1px solid ${on ? color : C.border}`, backgroundColor: on ? color : '#fff', color: on ? '#fff' : '#374151' }}>
+      {children}
+    </button>
+  );
+}
+
+function GridTile({ item, onOpen }: { item: any; onOpen: () => void }) {
+  const [err, setErr] = useState(false);
+  const isVid = item.resource_type === 'video';
+  return (
+    <button onClick={onOpen} aria-label={item.caption || (isVid ? 'Video' : 'Photo')}
+      style={{ position: 'relative', width: '100%', padding: '100% 0 0 0', border: 'none', borderRadius: 8,
+        overflow: 'hidden', backgroundColor: '#1f2937', cursor: 'pointer' }}>
+      {!err && <img src={thumbUrl(item.secure_url, item.resource_type)} alt="" loading="lazy" onError={() => setErr(true)}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}
+      {isVid && (
+        <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: 'rgba(0,0,0,0.55)', color: '#fff', fontSize: 11,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', paddingLeft: 2 }}>▶</span>
+        </span>
+      )}
+      {item.is_highlight ? <span style={{ position: 'absolute', top: 4, right: 4, fontSize: 13 }}>⭐</span> : null}
+      {item.tag_type && (
+        <span style={{ position: 'absolute', left: 4, bottom: 4, padding: '1px 6px', borderRadius: 6, fontSize: 9, fontWeight: 800,
+          color: '#fff', backgroundColor: (TAG_COLORS[item.tag_type] || C.muted) + 'e6' }}>{item.tag_type}</span>
+      )}
+    </button>
+  );
+}
+
+function GalleryTab({ base, reloadKey }: { base: string; reloadKey: number }) {
   const { can } = usePermissions();
 
   const [items,      setItems]      = useState<any[]>([]);
@@ -593,25 +633,13 @@ function GalleryTab({ base }: { base: string }) {
   const [msg,        setMsg]        = useState('');
   const [lightbox,   setLightbox]   = useState<any|null>(null);
 
-  // Apply a preset — sets from/to and marks preset active
-  const applyPreset = useCallback((p: RangePreset) => {
-    setPreset(p);
-    const td = today();
-    if (p === 'today') { setFrom(td);      setTo(td);       }
-    else if (p === '7d')  { setFrom(ago(7));  setTo(td);    }
-    else if (p === '15d') { setFrom(ago(15)); setTo(td);    }
-    else if (p === '30d') { setFrom(ago(30)); setTo(td);    }
-    else if (p === '90d') { setFrom(ago(90)); setTo(td);    }
-    // 'custom' — leave from/to as-is, just mark preset
-  }, []);
-
   const load = useCallback(async (
     f = from, t = to, tag = tagFilter,
     typ = typeFilter, q = search, hl = hlOnly
   ) => {
     const ip = localStorage.getItem('server_ip') || '';
     if (!ip) { setMsg('⚠ Server not configured — go to Settings'); return; }
-    setLoading(true); setFetched(false); setMsg('');
+    setLoading(true); setMsg('');
     try {
       const p = new URLSearchParams({ limit: '500', date_from: f, date_to: t });
       if (tag) p.set('tag_type',      tag);
@@ -630,41 +658,26 @@ function GalleryTab({ base }: { base: string }) {
     finally { setLoading(false); }
   }, [from, to, tagFilter, typeFilter, search, hlOnly]);
 
-  // Auto-load on mount
-  useEffect(() => { load(); }, []);
+  // Load on open, and again after a new upload
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [reloadKey]);
 
-  // Chips that auto-trigger load immediately
   const handlePreset = (p: RangePreset) => {
-    const td = today();
-    let f = from, t = to;
-    if (p === 'today') { f = td;      t = td;    }
-    else if (p === '7d')  { f = ago(7);  t = td; }
-    else if (p === '15d') { f = ago(15); t = td; }
-    else if (p === '30d') { f = ago(30); t = td; }
-    else if (p === '90d') { f = ago(90); t = td; }
-    setFrom(f); setTo(t); setPreset(p);
-    load(f, t, tagFilter, typeFilter, search, hlOnly);
+    setPreset(p);
+    const r = presetRange(p);
+    if (!r) return;                       // custom → pick dates, then Apply
+    setFrom(r[0]); setTo(r[1]);
+    load(r[0], r[1], tagFilter, typeFilter, search, hlOnly);
   };
-
-  const handleTag = (tag: string) => {
-    setTagFilter(tag);
-    load(from, to, tag, typeFilter, search, hlOnly);
+  const handleTag  = (tag: string) => { setTagFilter(tag);  load(from, to, tag, typeFilter, search, hlOnly); };
+  const handleType = (typ: string) => { setTypeFilter(typ); load(from, to, tagFilter, typ, search, hlOnly); };
+  const handleHl   = (val: boolean) => { setHlOnly(val);    load(from, to, tagFilter, typeFilter, search, val); };
+  const resetAll   = () => {
+    setPreset('7d'); setFrom(ago(7)); setTo(today());
+    setTagFilter(''); setTypeFilter(''); setSearch(''); setHlOnly(false);
+    load(ago(7), today(), '', '', '', false);
   };
-
-  const handleType = (typ: string) => {
-    setTypeFilter(typ);
-    load(from, to, tagFilter, typ, search, hlOnly);
-  };
-
-  const handleHl = (val: boolean) => {
-    setHlOnly(val);
-    load(from, to, tagFilter, typeFilter, search, val);
-  };
-
-  const handleDateChange = (newFrom: string, newTo: string) => {
-    setFrom(newFrom); setTo(newTo); setPreset('custom');
-    // Don't auto-load on date change — wait for Search button
-  };
+  const filtered = preset !== '7d' || !!tagFilter || !!typeFilter || !!search || hlOnly;
 
   const toggleHighlight = async (item: any) => {
     try {
@@ -673,15 +686,14 @@ function GalleryTab({ base }: { base: string }) {
       });
       const j = await r.json();
       if (j.status === 'success') {
-        setItems(prev => prev.map(i =>
-          i.id === item.id ? { ...i, is_highlight: j.is_highlight } : i
-        ));
+        setItems(prev => prev.map(i => i.id === item.id ? { ...i, is_highlight: j.is_highlight } : i));
+        setLightbox((lb: any) => lb?.id === item.id ? { ...lb, is_highlight: j.is_highlight } : lb);
       }
     } catch {}
   };
 
   const del = async (item: any) => {
-    if (!confirm(`Delete this ${item.resource_type === 'video' ? 'video' : 'photo'}?`)) return;
+    if (!confirm(`Delete this ${item.resource_type === 'video' ? 'video' : 'photo'}? This cannot be undone.`)) return;
     try {
       const r = await fetch(`${base}/api/data/pulse/${item.id}`, {
         method: 'DELETE', headers: hdr(),
@@ -689,6 +701,8 @@ function GalleryTab({ base }: { base: string }) {
       const j = await r.json();
       if (r.ok) {
         setItems(prev => prev.filter(i => i.id !== item.id));
+        setTotal(t => Math.max(0, t - 1));
+        setLightbox(null);
         setMsg('✅ Deleted');
         setTimeout(() => setMsg(''), 3000);
       } else {
@@ -698,371 +712,164 @@ function GalleryTab({ base }: { base: string }) {
   };
 
   // Stats
-  const photos = items.filter(i => i.resource_type === 'image').length;
-  const videos = items.filter(i => i.resource_type === 'video').length;
+  const photos     = items.filter(i => i.resource_type === 'image').length;
+  const videos     = items.filter(i => i.resource_type === 'video').length;
   const highlights = items.filter(i => i.is_highlight).length;
+  const cell = (n: number, label: string, first?: boolean) => (
+    <div style={{ flex: 1, padding: '6px 4px', textAlign: 'center', borderLeft: first ? 'none' : `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 15, fontWeight: 900, color: C.green }}>{n}</div>
+      <div style={{ fontSize: 9.5, fontWeight: 700, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{label}</div>
+    </div>
+  );
+  const lbIdx = lightbox ? items.findIndex(i => i.id === lightbox.id) : -1;
 
   return (
-    <div style={{ backgroundColor: C.bg, minHeight: '100%', paddingBottom: 80 }}>
+    <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-      {/* ── Filter panel ── */}
-      <div style={{ backgroundColor: C.card, borderBottom: `1px solid ${C.border}`,
-        padding: '12px 16px' }}>
-
-        {/* ── Row 1: Quick preset chips incl. Today ── */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10,
-          overflowX: 'auto' as const, scrollbarWidth: 'none' as any }}>
-          {([
-            { key: 'today', label: '📅 Today' },
-            { key: '7d',    label: '7d'        },
-            { key: '15d',   label: '15d'       },
-            { key: '30d',   label: '30d'       },
-            { key: '90d',   label: '90d'       },
-          ] as {key: RangePreset; label: string}[]).map(({ key, label }) => (
-            <button key={key} onClick={() => handlePreset(key)}
-              style={{ padding: '6px 14px', borderRadius: 20, border: 'none',
-                cursor: 'pointer', fontSize: 11, fontWeight: 800,
-                whiteSpace: 'nowrap' as const, flexShrink: 0,
-                backgroundColor: preset === key ? C.navy : '#f3f4f6',
-                color: preset === key ? C.gold : C.muted,
-                boxShadow: preset === key ? '0 2px 6px rgba(0,31,63,0.3)' : 'none' }}>
-              {label}
-            </button>
-          ))}
-          {/* Custom badge */}
-          {preset === 'custom' && (
-            <span style={{ padding: '6px 10px', borderRadius: 20,
-              backgroundColor: '#e0e7ff', color: '#3730a3',
-              fontSize: 10, fontWeight: 700, flexShrink: 0 }}>Custom</span>
-          )}
-          {/* Highlight toggle — pushed to end */}
-          <button onClick={() => handleHl(!hlOnly)}
-            style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: 20,
-              border: `1.5px solid ${hlOnly ? '#f59e0b' : C.border}`,
-              cursor: 'pointer', fontSize: 11, fontWeight: 800, flexShrink: 0,
-              backgroundColor: hlOnly ? '#fffbeb' : C.card,
-              color: hlOnly ? '#92400e' : C.muted }}>
-            ⭐ Highlights
-          </button>
+      {/* ── Filters ── */}
+      <div style={{ ...CARD, padding: 10, display: 'flex', flexDirection: 'column', gap: 7 }}>
+        <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          {PRESETS.map(p => <Chip key={p.key} on={preset === p.key} onClick={() => handlePreset(p.key)}>{p.label}</Chip>)}
         </div>
 
-        {/* ── Row 2: Custom date pickers (only shown for custom) ── */}
         {preset === 'custom' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
-            {(['From', 'To'] as const).map((label, i) => (
-              <div key={label}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: C.muted,
-                  textTransform: 'uppercase' as const, letterSpacing: '0.5px', marginBottom: 4 }}>
-                  {label}
-                </div>
-                <input type="date"
-                  value={i === 0 ? from : to}
-                  max={i === 0 ? to : today()}
-                  min={i === 1 ? from : undefined}
-                  onChange={e => handleDateChange(
-                    i === 0 ? e.target.value : from,
-                    i === 1 ? e.target.value : to
-                  )}
-                  style={{ width: '100%', padding: '9px 10px', borderRadius: 10,
-                    border: `1.5px solid ${C.border}`, fontSize: 13, outline: 'none',
-                    boxSizing: 'border-box' as const }} />
-              </div>
-            ))}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="date" value={from} max={to} aria-label="From date" onChange={e => setFrom(e.target.value)}
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13 }} />
+            <span style={{ color: C.muted, fontSize: 12 }}>→</span>
+            <input type="date" value={to} min={from} max={today()} aria-label="To date" onChange={e => setTo(e.target.value)}
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13 }} />
+            <button onClick={() => load()} disabled={loading} style={{ flexShrink: 0, padding: '7px 12px', borderRadius: 8, border: 'none',
+              backgroundColor: C.green, color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>Apply</button>
           </div>
         )}
 
-        {/* ── Row 3: Type filter ── */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-          {([
-            { key: '',      label: 'All Types' },
-            { key: 'image', label: '📷 Photos' },
-            { key: 'video', label: '🎥 Videos' },
-          ] as {key:string;label:string}[]).map(t => (
-            <button key={t.key} onClick={() => handleType(t.key)}
-              style={{ padding: '5px 14px', borderRadius: 20, border: 'none',
-                cursor: 'pointer', fontSize: 11, fontWeight: 800,
-                backgroundColor: typeFilter === t.key ? C.green : '#f3f4f6',
-                color: typeFilter === t.key ? '#fff' : C.muted }}>
-              {t.label}
-            </button>
+        <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 3, padding: 3, borderRadius: 8, backgroundColor: '#f3f4f6', flex: 1 }}>
+            {([['', 'All'], ['image', '📷 Photos'], ['video', '🎥 Videos']] as [string, string][]).map(([k, l]) => (
+              <button key={k} onClick={() => handleType(k)} aria-pressed={typeFilter === k}
+                style={{ flex: 1, height: 26, borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 11.5, fontWeight: 700,
+                  backgroundColor: typeFilter === k ? '#fff' : 'transparent', color: typeFilter === k ? C.green : C.muted,
+                  boxShadow: typeFilter === k ? '0 1px 2px rgba(0,0,0,0.12)' : 'none' }}>{l}</button>
+            ))}
+          </div>
+          <Chip on={hlOnly} color="#d97706" onClick={() => handleHl(!hlOnly)}>⭐ Best</Chip>
+        </div>
+
+        <div style={{ display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          <Chip on={!tagFilter} onClick={() => handleTag('')}>All tags</Chip>
+          {(allTags.length > 0 ? allTags : TAG_TYPES).map(t => (
+            <Chip key={t} on={tagFilter === t} color={TAG_COLORS[t] || C.muted} onClick={() => handleTag(t)}>{t}</Chip>
           ))}
         </div>
 
-        {/* ── Row 4: Tag chips from server ── */}
-        <div style={{ display: 'flex', gap: 6, overflowX: 'auto' as const,
-          scrollbarWidth: 'none' as any, marginBottom: 10 }}>
-          <button onClick={() => handleTag('')}
-            style={{ padding: '5px 14px', borderRadius: 20, border: 'none',
-              cursor: 'pointer', fontSize: 11, fontWeight: 800,
-              whiteSpace: 'nowrap' as const, flexShrink: 0,
-              backgroundColor: tagFilter === '' ? C.navy : '#f3f4f6',
-              color: tagFilter === '' ? '#fff' : C.muted }}>
-            All Tags
-          </button>
-          {(allTags.length > 0 ? allTags : TAG_TYPES).map(t => {
-            const col = TAG_COLORS[t] || C.muted;
-            return (
-              <button key={t} onClick={() => handleTag(t)}
-                style={{ padding: '5px 14px', borderRadius: 20, border: 'none',
-                  cursor: 'pointer', fontSize: 11, fontWeight: 800,
-                  whiteSpace: 'nowrap' as const, flexShrink: 0,
-                  backgroundColor: tagFilter === t ? col : '#f3f4f6',
-                  color: tagFilter === t ? '#fff' : C.muted }}>
-                {t}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ── Row 5: Search ── */}
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
           <div style={{ position: 'relative', flex: 1 }}>
-            <span style={{ position: 'absolute', left: 11, top: '50%',
-              transform: 'translateY(-50%)', fontSize: 14, color: C.muted }}>🔍</span>
-            <input value={search}
-              onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && load()}
-              placeholder="Search caption…"
-              style={{ width: '100%', padding: '9px 34px 9px 32px', borderRadius: 10,
-                border: `1.5px solid ${C.border}`, fontSize: 13, outline: 'none',
-                boxSizing: 'border-box' as const, backgroundColor: '#f9fafb' }} />
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13 }}>🔍</span>
+            <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()}
+              placeholder="Search captions…" aria-label="Search captions" enterKeyHint="search"
+              style={{ width: '100%', padding: '7px 30px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 13,
+                outline: 'none', boxSizing: 'border-box', backgroundColor: '#fff' }} />
             {search && (
-              <button onClick={() => { setSearch(''); load(from, to, tagFilter, typeFilter, '', hlOnly); }}
-                style={{ position: 'absolute', right: 10, top: '50%',
-                  transform: 'translateY(-50%)', background: 'none',
-                  border: 'none', cursor: 'pointer', fontSize: 15, color: C.muted }}>
-                ✕
-              </button>
+              <button onClick={() => { setSearch(''); load(from, to, tagFilter, typeFilter, '', hlOnly); }} aria-label="Clear search"
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none',
+                  cursor: 'pointer', fontSize: 14, color: C.muted }}>✕</button>
             )}
           </div>
-          <button onClick={() => load()} disabled={loading}
-            style={{ padding: '9px 16px', borderRadius: 10, border: 'none',
-              backgroundColor: loading ? '#9ca3af' : C.navy,
-              color: loading ? '#fff' : C.gold,
-              fontWeight: 800, fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer',
-              flexShrink: 0 }}>
-            {loading ? '⏳' : '↻'}
+          <button onClick={() => load()} disabled={loading} aria-label="Search"
+            style={{ flexShrink: 0, padding: '0 12px', borderRadius: 8, border: 'none', backgroundColor: loading ? '#9ca3af' : C.green,
+              color: '#fff', fontWeight: 800, fontSize: 12.5, cursor: loading ? 'not-allowed' : 'pointer' }}>
+            {loading ? '⏳' : 'Go'}
           </button>
         </div>
       </div>
 
-      {/* ── Action bar ── */}
-      <div style={{ display: 'flex', gap: 8, padding: '10px 16px 0' }}>
-        <button onClick={() => load()} disabled={loading}
-          style={{ flex: 2, padding: '11px', borderRadius: 11, border: 'none',
-            backgroundColor: loading ? '#9ca3af' : C.green,
-            color: '#fff', fontWeight: 800, fontSize: 13,
-            cursor: loading ? 'not-allowed' : 'pointer',
-            boxShadow: loading ? 'none' : '0 2px 8px rgba(26,71,42,0.3)' }}>
-          {loading ? '⏳ Loading…' : `🔍 Search${preset === 'today' ? ' Today' : ''}`}
-        </button>
-        <button onClick={() => {
-            setPreset('7d'); setFrom(ago(7)); setTo(today());
-            setTagFilter(''); setTypeFilter('');
-            setSearch(''); setHlOnly(false);
-            load(ago(7), today(), '', '', '', false);
-          }}
-          style={{ flex: 1, padding: '11px', borderRadius: 11,
-            border: `1px solid ${C.border}`, backgroundColor: C.card,
-            color: C.muted, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-          Reset
-        </button>
-      </div>
-
-      {/* ── Status message ── */}
       {msg && (
-        <div style={{ margin: '10px 16px 0', padding: '10px 14px', borderRadius: 11,
-          fontSize: 13, fontWeight: 700,
+        <div style={{ padding: '8px 12px', borderRadius: 10, fontSize: 12.5, fontWeight: 700,
           backgroundColor: msg.startsWith('✅') ? '#dcfce7' : '#fee2e2',
           border: `1px solid ${msg.startsWith('✅') ? '#86efac' : '#fca5a5'}`,
-          color: msg.startsWith('✅') ? '#166534' : C.red }}>
-          {msg}
-        </div>
+          color: msg.startsWith('✅') ? '#166534' : C.red }}>{msg}</div>
       )}
 
-      {/* ── Summary stats ── */}
+      {/* ── Summary ── */}
       {fetched && items.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, padding: '12px 16px 4px' }}>
-          {[
-            { icon: '📊', label: 'Total',      value: total,      color: C.green  },
-            { icon: '📷', label: 'Photos',     value: photos,     color: C.blue   },
-            { icon: '🎥', label: 'Videos',     value: videos,     color: C.purple },
-            { icon: '⭐', label: 'Highlights', value: highlights, color: '#f59e0b' },
-          ].map(s => (
-            <div key={s.label} style={{ flex: 1, backgroundColor: C.card, borderRadius: 12,
-              padding: '9px 6px', textAlign: 'center' as const,
-              border: `1px solid ${C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
-              <div style={{ fontWeight: 900, fontSize: 17, color: s.color }}>{s.value}</div>
-              <div style={{ fontSize: 9, color: C.muted, fontWeight: 700,
-                textTransform: 'uppercase' as const, letterSpacing: '0.4px', marginTop: 1 }}>
-                {s.icon} {s.label}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Results count */}
-      {fetched && (
-        <div style={{ padding: '6px 16px 8px', fontSize: 12, color: C.muted }}>
-          {items.length} of {total} item{total !== 1 ? 's' : ''}
-          {search && ` · "${search}"`}
-          {tagFilter && ` · ${tagFilter}`}
-          {typeFilter && ` · ${typeFilter === 'image' ? 'Photos' : 'Videos'} only`}
-          {hlOnly && ' · Highlights only'}
-        </div>
-      )}
-
-      {/* ── Empty states ── */}
-      {!fetched && !loading && (
-        <div style={{ textAlign: 'center', padding: '48px 20px', color: C.muted }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🌟</div>
-          <div style={{ fontWeight: 800, fontSize: 15, color: '#111', marginBottom: 6 }}>
-            Academy Pulse Gallery
+        <div style={CARD}>
+          <div style={{ display: 'flex' }}>
+            {cell(total, 'Items', true)}{cell(photos, 'Photos')}{cell(videos, 'Videos')}{cell(highlights, 'Best')}
           </div>
-          <div style={{ fontSize: 13, lineHeight: 1.7 }}>
-            Daily moments from the academy — training, matches &amp; achievements.<br />
-            Default shows last 7 days. Tap Search to load.
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 10px', borderTop: `1px solid ${C.border}`,
+            fontSize: 11, color: C.muted, backgroundColor: '#fafafa' }}>
+            <span>{fmt(from)} – {fmt(to)}{items.length < total ? ` · showing ${items.length}` : ''}</span>
+            {filtered && <button onClick={resetAll} style={{ background: 'none', border: 'none', padding: 0, color: C.green,
+              fontWeight: 800, fontSize: 11, cursor: 'pointer' }}>Reset filters</button>}
           </div>
         </div>
       )}
+
+      {/* ── Empty / loading ── */}
+      {loading && !fetched && <div style={{ textAlign: 'center', padding: '32px 0', color: C.muted, fontSize: 13 }}>Loading…</div>}
       {fetched && items.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '40px 20px', color: C.muted }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>📭</div>
-          <div style={{ fontWeight: 800, fontSize: 15, color: '#111', marginBottom: 6 }}>
-            No media found
-          </div>
-          <div style={{ fontSize: 13 }}>Try a wider date range or clear filters</div>
-          <button onClick={() => { setTagFilter(''); setTypeFilter(''); setSearch(''); setHlOnly(false); }}
-            style={{ marginTop: 12, padding: '8px 20px', borderRadius: 20, border: 'none',
-              backgroundColor: C.navy, color: C.gold, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-            Clear Filters
-          </button>
+        <div style={{ ...CARD, padding: '26px 16px', textAlign: 'center', color: C.muted }}>
+          <div style={{ fontSize: 30, marginBottom: 6 }}>📭</div>
+          <div style={{ fontWeight: 800, fontSize: 13.5, color: C.text }}>Nothing in this period</div>
+          <div style={{ fontSize: 12, marginTop: 3 }}>Try a wider date range or clear the filters</div>
+          {filtered && (
+            <button onClick={resetAll} style={{ marginTop: 10, padding: '7px 16px', borderRadius: 9, border: 'none',
+              backgroundColor: C.green, color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>Reset filters</button>
+          )}
         </div>
       )}
 
-      {/* ── Media cards ── */}
-      <div style={{ padding: '4px 16px 0' }}>
-        {items.map(item => (
-          <div key={item.id} style={{ backgroundColor: C.card, borderRadius: 16,
-            marginBottom: 14, boxShadow: '0 2px 12px rgba(0,0,0,0.07)',
-            overflow: 'hidden', border: `1px solid ${C.border}` }}>
-
-            {/* Media */}
-            <div style={{ position: 'relative', cursor: 'pointer' }}
-              onClick={() => setLightbox(item)}>
-              {item.resource_type === 'video' ? (
-                <video src={item.secure_url} controls playsInline
-                  style={{ width: '100%', maxHeight: 240, objectFit: 'cover',
-                    display: 'block', backgroundColor: '#000' }}
-                  onClick={e => e.stopPropagation()} />
-              ) : (
-                <img src={item.secure_url} alt={item.caption || ''}
-                  style={{ width: '100%', height: 220, objectFit: 'cover', display: 'block' }} />
-              )}
-
-              {/* Overlay badges */}
-              <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', gap: 6 }}>
-                <span style={{ backgroundColor: 'rgba(0,0,0,0.55)', color: '#fff',
-                  borderRadius: 8, padding: '3px 9px', fontSize: 10, fontWeight: 800 }}>
-                  {item.resource_type === 'video' ? '🎥 Video' : '📷 Photo'}
-                </span>
-                {item.tag_type && (
-                  <span style={{ backgroundColor: (TAG_COLORS[item.tag_type] || C.muted) + 'dd',
-                    color: '#fff', borderRadius: 8, padding: '3px 9px',
-                    fontSize: 10, fontWeight: 800 }}>
-                    {item.tag_type}
-                  </span>
-                )}
-              </div>
-
-              {/* Highlight star */}
-              {can('media:upload') && (
-                <button onClick={e => { e.stopPropagation(); toggleHighlight(item); }}
-                  style={{ position: 'absolute', top: 8, right: 8,
-                    width: 32, height: 32, borderRadius: '50%',
-                    backgroundColor: 'rgba(0,0,0,0.45)',
-                    border: 'none', cursor: 'pointer', fontSize: 16,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {item.is_highlight ? '⭐' : '☆'}
-                </button>
-              )}
-            </div>
-
-            {/* Info section */}
-            <div style={{ padding: '12px 14px 14px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between',
-                alignItems: 'flex-start', marginBottom: 8 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {item.caption && (
-                    <div style={{ fontWeight: 700, fontSize: 14, color: '#111',
-                      marginBottom: 4, lineHeight: 1.35 }}>
-                      {item.caption}
-                    </div>
-                  )}
-                  <div style={{ fontSize: 11, color: C.muted }}>
-                    📅 {fmt(item.activity_date)}
-                    {item.uploaded_by && ` · 👤 ${item.uploaded_by}`}
-                  </div>
-                </div>
-              </div>
-
-              {/* Actions */}
-              {can('media:delete') && (
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => setLightbox(item)}
-                    style={{ flex: 1, padding: '8px', borderRadius: 10,
-                      border: `1px solid ${C.border}`, backgroundColor: '#f9fafb',
-                      color: C.muted, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-                    🔍 View Full
-                  </button>
-                  <button onClick={() => del(item)}
-                    style={{ flex: 1, padding: '8px', borderRadius: 10,
-                      border: '1px solid #fca5a5', backgroundColor: '#fee2e2',
-                      color: '#dc2626', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-                    🗑 Delete
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* ── Grid ── */}
+      {items.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, opacity: loading ? 0.5 : 1 }}>
+          {items.map(item => <GridTile key={item.id} item={item} onOpen={() => setLightbox(item)} />)}
+        </div>
+      )}
 
       {/* ── Lightbox ── */}
       {lightbox && (
-        <div onClick={() => setLightbox(null)}
-          style={{ position: 'fixed', inset: 0, zIndex: 5000,
-            backgroundColor: 'rgba(0,0,0,0.92)',
-            display: 'flex', flexDirection: 'column' as const,
-            alignItems: 'center', justifyContent: 'center' }}>
-          <div onClick={e => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: 500, padding: '0 12px' }}>
-            {lightbox.resource_type === 'video' ? (
-              <video src={lightbox.secure_url} controls playsInline autoPlay
-                style={{ width: '100%', borderRadius: 14, maxHeight: '70vh' }} />
-            ) : (
-              <img src={lightbox.secure_url} alt={lightbox.caption || ''}
-                style={{ width: '100%', borderRadius: 14, maxHeight: '70vh',
-                  objectFit: 'contain' }} />
+        <div onClick={() => setLightbox(null)} role="dialog" aria-label="Media viewer"
+          style={{ position: 'fixed', inset: 0, zIndex: 5000, backgroundColor: 'rgba(0,0,0,0.94)', display: 'flex', flexDirection: 'column',
+            paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          <div onClick={e => e.stopPropagation()} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px' }}>
+            <button onClick={() => setLightbox(null)} aria-label="Close"
+              style={{ background: 'rgba(255,255,255,0.12)', border: 'none', color: '#fff', fontSize: 16, borderRadius: 8, padding: '6px 11px', cursor: 'pointer' }}>✕</button>
+            <span style={{ flex: 1, color: 'rgba(255,255,255,0.6)', fontSize: 12, textAlign: 'center' }}>{lbIdx + 1} / {items.length}</span>
+            {can('media:upload') && (
+              <button onClick={() => toggleHighlight(lightbox)} aria-pressed={!!lightbox.is_highlight}
+                style={{ background: lightbox.is_highlight ? C.gold : 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 8, padding: '6px 10px',
+                  color: lightbox.is_highlight ? C.green : '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>
+                {lightbox.is_highlight ? '⭐ Best' : '☆ Mark best'}
+              </button>
             )}
-            <div style={{ color: '#fff', textAlign: 'center' as const, marginTop: 12 }}>
-              {lightbox.caption && (
-                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>
-                  {lightbox.caption}
-                </div>
-              )}
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-                {fmt(lightbox.activity_date)} · {lightbox.tag_type}
-              </div>
+            {can('media:delete') && (
+              <button onClick={() => del(lightbox)} aria-label="Delete"
+                style={{ background: 'rgba(220,38,38,0.85)', border: 'none', borderRadius: 8, padding: '6px 10px', color: '#fff',
+                  fontWeight: 800, fontSize: 12, cursor: 'pointer' }}>🗑</button>
+            )}
+          </div>
+          <div onClick={e => e.stopPropagation()} style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 8px' }}>
+            {lightbox.resource_type === 'video'
+              ? <ZoomableVideo key={lightbox.id} src={lightbox.secure_url}
+                  poster={thumbUrl(lightbox.secure_url, 'video', 720)} style={{ borderRadius: 10 }} />
+              : <ZoomableImage src={lightbox.secure_url} alt={lightbox.caption || ''} style={{ borderRadius: 10 }} />}
+          </div>
+          <div onClick={e => e.stopPropagation()} style={{ padding: '10px 14px 14px', color: '#fff' }}>
+            {lightbox.caption && <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 3 }}>{lightbox.caption}</div>}
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>
+              {[fmt(lightbox.activity_date), lightbox.tag_type, lightbox.uploaded_by && `by ${lightbox.uploaded_by}`].filter(Boolean).join(' · ')}
             </div>
-            <button onClick={() => setLightbox(null)}
-              style={{ display: 'block', margin: '16px auto 0',
-                backgroundColor: 'rgba(255,255,255,0.15)', border: 'none',
-                color: '#fff', padding: '10px 28px', borderRadius: 20,
-                cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>
-              Close
-            </button>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button disabled={lbIdx <= 0} onClick={() => setLightbox(items[lbIdx - 1])}
+                style={{ flex: 1, padding: '9px', borderRadius: 9, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)',
+                  color: lbIdx <= 0 ? 'rgba(255,255,255,0.3)' : '#fff', fontWeight: 700, fontSize: 13, cursor: lbIdx <= 0 ? 'default' : 'pointer' }}>‹ Previous</button>
+              <button disabled={lbIdx >= items.length - 1} onClick={() => setLightbox(items[lbIdx + 1])}
+                style={{ flex: 1, padding: '9px', borderRadius: 9, border: 'none',
+                  background: lbIdx >= items.length - 1 ? 'rgba(255,255,255,0.08)' : C.gold,
+                  color: lbIdx >= items.length - 1 ? 'rgba(255,255,255,0.3)' : C.green, fontWeight: 800, fontSize: 13,
+                  cursor: lbIdx >= items.length - 1 ? 'default' : 'pointer' }}>Next ›</button>
+            </div>
           </div>
         </div>
       )}
@@ -1073,41 +880,29 @@ function GalleryTab({ base }: { base: string }) {
 // ── Main Screen ───────────────────────────────────────────────────────────────
 type PulseTab = 'capture' | 'gallery';
 
-
 export default function PulseScreen() {
-  const navigate = useNavigate();
   const { can }  = usePermissions();
   const base     = bld(localStorage.getItem('server_ip') ?? '');
-  const [tab,   setTab]   = useState<PulseTab>(can('media:upload') ? 'capture' : 'gallery');
-  const [badge, setBadge] = useState(0); // count of items uploaded this session
+  const [tab,       setTab]       = useState<PulseTab>(can('media:upload') ? 'capture' : 'gallery');
+  const [uploaded,  setUploaded]  = useState(0);   // items published in this visit — also reloads the gallery
 
-  const onUploaded = () => { setBadge(b => b + 1); setTab('gallery'); };
+  const onUploaded = () => { setUploaded(n => n + 1); setTab('gallery'); };
 
   return (
-    <div style={{ backgroundColor: C.bg, minHeight: '100vh',
-      fontFamily: 'sans-serif', paddingBottom: 40 }}>
-
-      <ScreenHeader background={`linear-gradient(135deg,${C.navy} 0%,#0d2b4a 100%)`}
-        title={<span style={{ color: C.gold }}>🌟 Academy Pulse</span>}
-        subtitle="Daily academy life — training, matches & achievements"
-        actions={badge > 0 ? (
-          <div style={{ backgroundColor: C.green, color: '#fff', borderRadius: 20,
-            padding: '4px 10px', fontSize: 12, fontWeight: 800, marginRight: 8 }}>
-            +{badge} today
-          </div>
-        ) : undefined}>
-        <HeaderTabs color={C.navy} value={tab} onChange={setTab}
+    <div style={{ backgroundColor: C.bg, minHeight: '100%', fontFamily: 'sans-serif', color: C.text, paddingBottom: 24 }}>
+      <ScreenHeader title="Academy Pulse"
+        subtitle={uploaded > 0 ? `✔ ${uploaded} published this visit` : 'Training, matches & achievements'}>
+        <HeaderTabs value={tab} onChange={setTab}
           tabs={([
             ...(can('media:upload') ? [['capture', '📷 Capture']] : []),
             ['gallery', '📂 Gallery'],
           ] as [PulseTab, string][]).map(([id, label]) => ({ id, label }))} />
       </ScreenHeader>
 
-      {/* Content */}
       {tab === 'capture' && can('media:upload') && (
         <CaptureTab base={base} onUploaded={onUploaded} />
       )}
-      {tab === 'gallery' && <GalleryTab base={base} />}
+      {tab === 'gallery' && <GalleryTab base={base} reloadKey={uploaded} />}
     </div>
   );
 }
