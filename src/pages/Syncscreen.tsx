@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
-import { checkSyncStatus, repairAttendance } from './useSyncService';
+import { checkSyncStatus, repairAttendance, reconcilePaymentDeletions } from './useSyncService';
 import {
   clearHistAttendance, getHistAttendanceCount, getHistLastFetchedAt, getHistMaxId,
   getPendingUploadCount, getStudentCount,
@@ -19,9 +19,14 @@ const LS = {
 };
 
 const C = {
-  bg: '#0f1a13', card: '#162218', border: '#243828',
-  green: '#1a472a', gold: '#d4af37', text: '#e8f5ec', muted: '#6b8f73',
-  red: '#c0392b', blue: '#2980b9', teal: '#16a085',
+  bg: '#f4f7f6', card: '#ffffff', border: '#e8e8e8',
+  green: '#1a472a', gold: '#d4af37', text: '#1f2937', muted: '#6b7280',
+  red: '#c0392b', amber: '#b45309', okBg: '#dcfce7', ok: '#166534',
+};
+const CARD: React.CSSProperties = { backgroundColor: C.card, borderRadius: 12, border: `1px solid ${C.border}`, overflow: 'hidden' };
+const fmtDay = (d: string) => {
+  const x = new Date(d + 'T00:00:00');
+  return isNaN(x.getTime()) ? d : x.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 };
 
 type Phase = 'idle' | 'running' | 'done' | 'error';
@@ -72,92 +77,91 @@ function checkConfig(): string|null {
 function LogView({ lines }: { lines: LogLine[] }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [lines]);
-  const lc: Record<string,string> = { info:C.muted, ok:'#4caf77', warn:'#e6a817', err:C.red };
+  const lc: Record<string,string> = { info:C.muted, ok:C.ok, warn:C.amber, err:C.red };
   const pfx: Record<string,string> = { info:'›', ok:'✔', warn:'⚠', err:'✖' };
   return (
-    <div ref={ref} style={{ backgroundColor:'#080e0a', borderRadius:10, padding:'10px 14px', fontFamily:'monospace', fontSize:11.5, maxHeight:180, overflowY:'auto', border:`1px solid ${C.border}` }}>
-      {lines.length === 0
-        ? <span style={{ color:C.border }}>// awaiting operation…</span>
-        : lines.map((l,i) => (
-          <div key={i} style={{ display:'flex', gap:7, marginBottom:2 }}>
-            <span style={{ color:'#3a5040', flexShrink:0 }}>{l.ts}</span>
-            <span style={{ color:lc[l.level], flexShrink:0 }}>{pfx[l.level]}</span>
-            <span style={{ color:lc[l.level] }}>{l.msg}</span>
-          </div>
-        ))
-      }
-    </div>
-  );
-}
-
-// ─── Op card ──────────────────────────────────────────────────────────────────
-function OpCard({ icon, title, desc, accent, phase, onRun, children }: {
-  icon:string; title:string; desc:string; accent:string;
-  phase:Phase; onRun:()=>void; children?: React.ReactNode;
-}) {
-  const running = phase === 'running';
-  const done    = phase === 'done';
-  const error   = phase === 'error';
-  const btnBg   = running ? C.border : error ? C.red : done ? '#4caf77' : accent;
-  return (
-    <div style={{ backgroundColor:C.card, borderRadius:14, border:`1.5px solid ${phase!=='idle' ? accent : C.border}`, overflow:'hidden', transition:'border-color 0.2s' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 14px 10px' }}>
-        <span style={{ fontSize:22 }}>{icon}</span>
-        <div style={{ flex:1 }}>
-          <div style={{ fontSize:14, fontWeight:800, color:C.text }}>{title}</div>
-          <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>{desc}</div>
+    <div ref={ref} style={{ backgroundColor:'#f9fafb', borderTop:`1px solid ${C.border}`, padding:'8px 12px',
+      fontFamily:'monospace', fontSize:11.5, maxHeight:220, overflowY:'auto' }}>
+      {lines.map((l,i) => (
+        <div key={i} style={{ display:'flex', gap:7, marginBottom:2, lineHeight:1.35 }}>
+          <span style={{ color:'#9ca3af', flexShrink:0 }}>{l.ts}</span>
+          <span style={{ color:lc[l.level], flexShrink:0 }}>{pfx[l.level]}</span>
+          <span style={{ color:lc[l.level], overflowWrap:'anywhere' }}>{l.msg}</span>
         </div>
-      </div>
-      {children && <div style={{ padding:'0 14px 8px' }}>{children}</div>}
-      <div style={{ padding:'0 14px 14px' }}>
-        <button onClick={onRun} disabled={running} style={{
-          width:'100%', padding:'11px', borderRadius:10, border:'none',
-          backgroundColor:btnBg, color:'#fff', fontWeight:800, fontSize:13,
-          cursor:running ? 'not-allowed' : 'pointer',
-          boxShadow: running ? 'none' : `0 3px 10px ${btnBg}55`,
-          transition:'all 0.2s',
-        }}>
-          {running ? '⏳  Running…' : done ? '✔  Done — Run again' : error ? '⚠  Error — Retry' : '▶  Run'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Mode chips ───────────────────────────────────────────────────────────────
-function ModeChips<T extends string>({ value, options, onChange, accent }: {
-  value:T; options:{val:T;label:string;sub:string}[]; onChange:(v:T)=>void; accent:string;
-}) {
-  return (
-    <div style={{ display:'flex', gap:6 }}>
-      {options.map(o => (
-        <button key={o.val} onClick={() => onChange(o.val)} style={{
-          flex:1, padding:'6px 4px', borderRadius:8, border:'none', cursor:'pointer', fontSize:10,
-          fontWeight:700, textTransform:'uppercase' as const, letterSpacing:'0.3px',
-          backgroundColor: value===o.val ? accent+'33' : '#0a1209',
-          color: value===o.val ? accent : C.muted,
-          outline: `1.5px solid ${value===o.val ? accent : C.border}`,
-        }}>
-          <div>{o.label}</div>
-          <div style={{ fontSize:9, fontWeight:400, marginTop:2, opacity:0.8 }}>{o.sub}</div>
-        </button>
       ))}
     </div>
   );
 }
 
-// ─── Stat chip ────────────────────────────────────────────────────────────────
-function Stat({ icon, label, value, color }: { icon:string; label:string; value:string|number; color:string }) {
+// ─── Operation row: title + status line + Run on the right ───────────────────
+function OpRow({ icon, title, sub, phase, locked, onRun, children }: {
+  icon:string; title:string; sub:React.ReactNode;
+  phase:Phase; locked?:boolean; onRun:()=>void; children?: React.ReactNode;
+}) {
+  const running = phase === 'running';
+  const off     = running || !!locked;
+  const btn = running        ? { t:'⏳',        bg:'#e5e7eb', c:C.muted }
+            : phase==='error' ? { t:'⚠ Retry',  bg:'#fee2e2', c:C.red }
+            : phase==='done'  ? { t:'✔ Again',  bg:C.okBg,    c:C.ok }
+            :                   { t:'Run',      bg:C.green,   c:'#fff' };
   return (
-    <div style={{ backgroundColor:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:'9px 12px', display:'flex', alignItems:'center', gap:8, flex:1 }}>
-      <span style={{ fontSize:18 }}>{icon}</span>
-      <div>
-        <div style={{ fontSize:9, color:C.muted, textTransform:'uppercase' as const, letterSpacing:'0.5px' }}>{label}</div>
-        <div style={{ fontSize:17, fontWeight:800, color }}>{value}</div>
+    <div style={{ padding:'9px 12px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <span style={{ fontSize:20, width:26, textAlign:'center', flexShrink:0 }}>{icon}</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:14, fontWeight:800, color:C.text }}>{title}</div>
+          <div style={{ fontSize:11.5, color:C.muted, marginTop:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
+        </div>
+        <button onClick={onRun} disabled={off} style={{
+          flexShrink:0, minWidth:74, padding:'8px 12px', borderRadius:9, border:'none',
+          backgroundColor: locked && !running ? '#e5e7eb' : btn.bg,
+          color: locked && !running ? '#9ca3af' : btn.c,
+          fontWeight:800, fontSize:12.5, cursor: off ? 'not-allowed' : 'pointer',
+        }}>{btn.t}</button>
       </div>
+      {running && (
+        <div style={{ height:3, backgroundColor:C.border, borderRadius:2, overflow:'hidden', marginTop:8 }}>
+          <div style={{ height:'100%', backgroundColor:C.green, borderRadius:2, animation:'ss-slide 1.6s ease-in-out infinite' }} />
+        </div>
+      )}
+      {children && <div style={{ marginTop:7, paddingLeft:36 }}>{children}</div>}
     </div>
   );
 }
+
+// ─── Mode switch (segmented) ──────────────────────────────────────────────────
+function ModeChips<T extends string>({ value, options, onChange }: {
+  value:T; options:{val:T;label:string;sub:string}[]; onChange:(v:T)=>void;
+}) {
+  const cur = options.find(o => o.val === value);
+  return (
+    <div>
+      <div style={{ display:'flex', gap:3, padding:3, borderRadius:8, backgroundColor:'#f3f4f6' }}>
+        {options.map(o => (
+          <button key={o.val} onClick={() => onChange(o.val)} aria-pressed={value===o.val} style={{
+            flex:1, height:26, borderRadius:6, border:'none', cursor:'pointer', fontSize:11.5, fontWeight:700,
+            backgroundColor: value===o.val ? '#fff' : 'transparent',
+            color: value===o.val ? C.green : C.muted,
+            boxShadow: value===o.val ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
+          }}>{o.label}</button>
+        ))}
+      </div>
+      {cur && <div style={{ fontSize:10.5, color:C.muted, marginTop:3 }}>{cur.sub}</div>}
+    </div>
+  );
+}
+
+const Warn = ({ children }: { children: React.ReactNode }) => (
+  <div style={{ marginTop:6, padding:'5px 8px', borderRadius:7, backgroundColor:'#fffbeb',
+    border:'1px solid #fcd34d', fontSize:11, color:'#92400e', fontWeight:600 }}>⚠ {children}</div>
+);
+
+const SectionLabel = ({ children }: { children: React.ReactNode }) => (
+  <div style={{ fontSize:10.5, fontWeight:800, color:C.muted, letterSpacing:'0.8px',
+    textTransform:'uppercase' as const, margin:'4px 2px -2px' }}>{children}</div>
+);
+
+const Hair = () => <div style={{ height:1, backgroundColor:C.border, marginLeft:48 }} />;
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 export default function SyncScreen() {
@@ -512,6 +516,10 @@ export default function SyncScreen() {
         addLog('ok', `Payments: summary updated for ${summaryKeys.length} student(s) ✓`);
       }
 
+      // Step 4 — drop payments voided on the server (sync only ever adds rows)
+      const removed = await reconcilePaymentDeletions(base);
+      if (removed) addLog('ok', `Payments: removed ${removed} voided row(s) ✓`);
+
       const now = new Date().toLocaleString();
       localStorage.setItem('last_payments_sync', now);
       setLastPayments(now);
@@ -617,317 +625,281 @@ export default function SyncScreen() {
     await runPayments();
   };
 
+  // Session (the password is never stored — the JWT is the credential)
+  const jwtExp     = parseInt(localStorage.getItem('jwt_expiry') || '0', 10);
+  const sessionOk  = !!localStorage.getItem('jwt_token') && Date.now() < jwtExp;
+  const sessionTxt = sessionOk
+    ? `session valid till ${new Date(jwtExp).toLocaleString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}`
+    : 'session expired — sign in again';
+
+  // Log: collapsed to its last line; opens by itself when something fails
+  const [logOpen, setLogOpen] = useState(false);
+  useEffect(() => { if (log.length && log[log.length-1].level === 'err') setLogOpen(true); }, [log]);
+  const lastLine = log[log.length-1];
+
+  const showDownload = isAdminOrCoach && (can('sync:students') || can('sync:download') || can('sync:payments'));
+  const statCell = (label: string, value: number, color: string, first?: boolean) => (
+    <div style={{ flex:1, padding:'7px 4px', textAlign:'center' as const, borderLeft: first ? 'none' : `1px solid ${C.border}` }}>
+      <div style={{ fontSize:16, fontWeight:900, color }}>{value.toLocaleString('en-IN')}</div>
+      <div style={{ fontSize:9.5, fontWeight:700, color:C.muted, textTransform:'uppercase' as const, letterSpacing:'0.4px' }}>{label}</div>
+    </div>
+  );
+
   return (
-    <div style={{ backgroundColor:C.bg, minHeight:'100vh', fontFamily:"'DM Sans','Segoe UI',sans-serif", color:C.text, paddingBottom:40 }}>
+    <div style={{ backgroundColor:C.bg, minHeight:'100%', fontFamily:'sans-serif', color:C.text, paddingBottom:24 }}>
 
       <ScreenHeader title="Data Sync" back={() => navigate('/')}
-        subtitle={<span style={{ color:C.gold, fontWeight:700, letterSpacing:'1px', fontSize:10 }}>QCA PORTAL</span>}
+        subtitle="Server ↔ this device"
         actions={<HeaderIconButton label="Settings" onClick={() => navigate('/settings')}>⚙️</HeaderIconButton>} />
 
-      <div style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:12 }}>
+      <div style={{ padding:10, display:'flex', flexDirection:'column', gap:8 }}>
 
-        {/* Server info */}
-        <div style={{ backgroundColor:C.card, borderRadius:12, padding:'11px 14px', border:`1px solid ${C.border}`, display:'flex', alignItems:'center', gap:10 }}>
-          <span style={{ fontSize:18 }}>🖥️</span>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:13, fontWeight:700, color:C.text, wordBreak:'break-all' }}>
-              {localStorage.getItem(LS.ip) || <span style={{ color:C.red }}>Not configured</span>}
+        {/* ── Server, session, counts ── */}
+        <div style={CARD}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 12px' }}>
+            <span style={{ fontSize:16 }}>🖥️</span>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {localStorage.getItem(LS.ip) || <span style={{ color:C.red }}>No server configured</span>}
+              </div>
+              <div style={{ fontSize:11, marginTop:1, color: sessionOk ? C.muted : C.red, fontWeight: sessionOk ? 400 : 700 }}>
+                {localStorage.getItem(LS.user) || '—'} · {sessionTxt}
+              </div>
             </div>
-            <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>
-              {localStorage.getItem(LS.user)||'—'} · {localStorage.getItem(LS.pass) ? '●●● set' : <span style={{color:C.red}}>no password</span>}
+            <button onClick={() => navigate('/settings')} style={{ backgroundColor:'#f0f4f0', color:C.green, border:'none',
+              borderRadius:8, padding:'5px 10px', cursor:'pointer', fontSize:12, fontWeight:700 }}>Edit</button>
+          </div>
+          <div style={{ display:'flex', borderTop:`1px solid ${C.border}`, backgroundColor:'#fafafa' }}>
+            {statCell('Students', stuCount,      C.green, true)}
+            {statCell('Pending',  pendCount,     pendCount > 0 ? C.amber : C.ok)}
+            {statCell('Hager',    hagCount,      C.text)}
+            {statCell('Payments', paymentsCount, C.text)}
+          </div>
+        </div>
+
+        {/* ── Run all ── */}
+        {can('sync:runall') && (
+          <button onClick={runAll} disabled={anyRunning} style={{
+            width:'100%', padding:'11px', borderRadius:11, border:'none',
+            backgroundColor: anyRunning ? '#e5e7eb' : C.green,
+            color: anyRunning ? C.muted : C.gold, fontWeight:900, fontSize:14,
+            cursor: anyRunning ? 'not-allowed' : 'pointer',
+          }}>
+            {anyRunning ? '⏳ Sync running…' : '⇅ Sync Everything'}
+            {!anyRunning && <div style={{ fontSize:10.5, fontWeight:600, color:'rgba(255,255,255,0.7)', marginTop:1 }}>
+              Students → Upload → Hager → Payments
+            </div>}
+          </button>
+        )}
+
+        {/* ── Upload (daily) ── */}
+        {can('sync:upload') && (<>
+          <SectionLabel>⬆ Upload to server</SectionLabel>
+          <div style={CARD}>
+            <OpRow icon="📤" title="Upload Attendance" phase={upPhase} locked={anyRunning} onRun={runUpload}
+              sub={pendCount > 0
+                ? <b style={{ color:C.amber }}>{pendCount} record{pendCount===1?'':'s'} waiting</b>
+                : 'All attendance uploaded ✔'} />
+          </div>
+        </>)}
+
+        {/* ── Download ── */}
+        {showDownload && (<>
+          <SectionLabel>⬇ Download from server</SectionLabel>
+          <div style={CARD}>
+            {can('sync:students') && <OpRow icon="👨‍🎓" title="Students" phase={stuPhase} locked={anyRunning} onRun={runStudents}
+              sub={lastStu ? `Last: ${lastStu}` : 'Student roster'}>
+              <ModeChips value={stuMode} onChange={setStuMode} options={[
+                { val:'incremental', label:'New',    sub:'New students since last sync' },
+                { val:'latest',      label:'Latest', sub:'Re-check the most recent 50' },
+                { val:'full',        label:'Full',   sub:'Re-download every student' },
+              ]} />
+              {stuMode === 'full' && <Warn>Resets the sync cursor — downloads all students</Warn>}
+            </OpRow>}
+
+            {can('sync:students') && can('sync:download') && <Hair />}
+            {can('sync:download') && <OpRow icon="📋" title="Hager Register" phase={hagPhase} locked={anyRunning} onRun={runHager}
+              sub={lastHag ? `Last: ${lastHag}` : 'Full attendance history'}>
+              <ModeChips value={hagMode} onChange={setHagMode} options={[
+                { val:'smart', label:'Smart', sub: hagCount > 0 ? `Has ${hagCount.toLocaleString('en-IN')} rows — fetch new only` : 'Empty — will download everything' },
+                { val:'full',  label:'Full',  sub:'Wipe and re-download all' },
+              ]} />
+              {hagMode === 'full' && <Warn>Wipes the local history first — safe, the server keeps the master copy</Warn>}
+            </OpRow>}
+
+            {(can('sync:students') || can('sync:download')) && can('sync:payments') && <Hair />}
+            {can('sync:payments') && <OpRow icon="💰" title="Payments & Fees" phase={payPhase} locked={anyRunning} onRun={runPayments}
+              sub={lastPayments ? `Last: ${lastPayments}` : 'Payment history and dues'}>
+              <ModeChips value={payMode} onChange={setPayMode} options={[
+                { val:'smart', label:'Smart', sub: paymentsCount > 0 ? `Has ${paymentsCount.toLocaleString('en-IN')} rows — fetch new only` : 'Empty — will download everything' },
+                { val:'full',  label:'Full',  sub:'Re-download all payments' },
+              ]} />
+            </OpRow>}
+          </div>
+        </>)}
+
+        {/* ── Log ── */}
+        <div style={CARD}>
+          <button onClick={() => log.length && setLogOpen(v => !v)} aria-expanded={logOpen}
+            style={{ width:'100%', display:'flex', alignItems:'center', gap:8, padding:'8px 12px',
+              background:'none', border:'none', cursor: log.length ? 'pointer' : 'default', textAlign:'left' as const }}>
+            <span style={{ fontSize:12, fontWeight:800, color:C.text, flexShrink:0 }}>📋 Log</span>
+            <span style={{ flex:1, minWidth:0, fontSize:11.5, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+              color: !lastLine ? C.muted : lastLine.level === 'err' ? C.red : lastLine.level === 'ok' ? C.ok : C.muted }}>
+              {lastLine ? lastLine.msg : 'No activity yet'}
+            </span>
+            {log.length > 0 && <span style={{ fontSize:11, color:C.muted, flexShrink:0 }}>{log.length} {logOpen ? '▲' : '▼'}</span>}
+          </button>
+          {logOpen && log.length > 0 && <LogView lines={log} />}
+        </div>
+
+        {/* ── Tools ── */}
+        <details style={{ ...CARD, padding:0 }}>
+          <summary style={{ padding:'9px 12px', fontSize:12.5, fontWeight:800, color:C.text, cursor:'pointer' }}>
+            🧰 Tools <span style={{ fontWeight:500, color:C.muted }}>— check, repair, re-upload, full refresh</span>
+          </summary>
+
+          {/* Sync validation */}
+          <div style={{ padding:'9px 12px', borderTop:`1px solid ${C.border}` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <span style={{ fontSize:18, width:26, textAlign:'center' }}>🔍</span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13.5, fontWeight:800 }}>Check sync</div>
+                <div style={{ fontSize:11.5, color:C.muted }}>Compare this device with the server</div>
+              </div>
+              <button disabled={checkLoading} onClick={async () => {
+                setCheckLoading(true); setSyncCheck(null); setRepairMsg('');
+                try {
+                  const results = await checkSyncStatus(base);
+                  setSyncCheck(results);
+                } catch(e) {
+                  setSyncCheck([{table:'Error', local:0, server:0, match:false}]);
+                }
+                setCheckLoading(false);
+              }} style={{ flexShrink:0, minWidth:74, padding:'8px 12px', borderRadius:9, border:'none',
+                backgroundColor: checkLoading ? '#e5e7eb' : C.green, color: checkLoading ? C.muted : '#fff',
+                fontWeight:800, fontSize:12.5, cursor:'pointer' }}>
+                {checkLoading ? '⏳' : 'Check'}
+              </button>
             </div>
-          </div>
-          <button onClick={() => navigate('/settings')} style={{ background:'none', border:`1px solid ${C.border}`, color:C.muted, borderRadius:8, padding:'5px 10px', cursor:'pointer', fontSize:11 }}>Edit</button>
-        </div>
-
-        {/* Stats */}
-        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-          <Stat icon="👨‍🎓" label="Students"  value={stuCount}       color={C.gold} />
-          <Stat icon="⬆"   label="Pending"   value={pendCount}      color={pendCount > 0 ? C.red : '#4caf77'} />
-          <Stat icon="📋"   label="Hager DB"  value={hagCount}       color={C.blue} />
-          <Stat icon="💰"   label="Payments"  value={paymentsCount}  color='#27ae60' />
-        </div>
-
-        {/* ═══════════════════════════════════════════════════════
-            SECTION A — DATA DOWNLOAD (server → mobile)
-        ═══════════════════════════════════════════════════════ */}
-        {/* ── Full Refresh — see Settings page ── */}
-        <div style={{ backgroundColor:'#f0fdf4', borderRadius:12, padding:'14px',
-          border:'1px solid #86efac', marginBottom:4 }}>
-          <div style={{ fontWeight:800, fontSize:14, color:'#166534', marginBottom:4 }}>
-            🔄 Full Refresh
-          </div>
-          <div style={{ fontSize:12, color:'#6b7280', marginBottom:8 }}>
-            Full Refresh is available in <strong>Settings</strong>.
-            It clears all local data and re-downloads from server based on your role.
-          </div>
-          <button onClick={() => window.location.hash = '/settings'}
-            style={{ padding:'10px 18px', borderRadius:8, border:'none',
-              backgroundColor:'#166534', color:'#fff', fontWeight:700,
-              fontSize:13, cursor:'pointer' }}>
-            → Go to Settings
-          </button>
-        </div>
-
-                {/* ── Sync validation check — available to all ── */}
-        <div style={{ backgroundColor:'#f8f9fa', borderRadius:12, padding:'14px', border:'1px solid #e5e7eb' }}>
-          <div style={{ fontWeight:800, fontSize:14, marginBottom:6, color:'#111827' }}>
-            🔍 Sync Validation
-          </div>
-          <div style={{ fontSize:12, color:'#6b7280', marginBottom:10 }}>
-            Compare local records with server to verify sync is working.
-          </div>
-          <button onClick={async () => {
-            setCheckLoading(true); setSyncCheck(null); setRepairMsg('');
-            try {
-              const results = await checkSyncStatus(base);
-              setSyncCheck(results);
-            } catch(e) {
-              setSyncCheck([{table:'Error', local:0, server:0, match:false}]);
-            }
-            setCheckLoading(false);
-          }}
-            style={{ width:'100%', padding:'10px', borderRadius:8, border:'none',
-              backgroundColor:'#0d1b2a', color:'#c5a059', cursor:'pointer',
-              fontWeight:800, fontSize:13, marginBottom: syncCheck ? 10 : 0 }}>
-            {checkLoading ? '⏳ Checking…' : '🔍 Check Now'}
-          </button>
-          {syncCheck && (
-            <div style={{ marginTop:8 }}>
-              {syncCheck.map(row => (
-                <div key={row.table} style={{ padding:'8px 10px', borderRadius:8, marginBottom:4,
-                  backgroundColor: row.match ? '#f0fdf4' : '#fee2e2',
-                  border: `1px solid ${row.match ? '#86efac' : '#fca5a5'}` }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <span style={{ fontSize:13, fontWeight:700, color:'#111827' }}>{row.table}</span>
-                    <span style={{ fontSize:12, color: row.match ? '#166534' : '#dc2626', fontWeight:800 }}>
-                      {row.match
-                        ? `✅ Local: ${row.local} = Server: ${row.server}`
-                        : `⚠ Local: ${row.local} | Server: ${row.server}`}
-                    </span>
-                  </div>
-                  {row.detail && (
-                    <div style={{ fontSize:11, color:'#6b7280', marginTop:2 }}>{row.detail}</div>
-                  )}
-                </div>
-              ))}
-
-              {/* Repair button — shown if any row needs fixing */}
-              {syncCheck.some(r => r.canRepair) && (
-                <div style={{ marginTop:8 }}>
-                  <button disabled={repairing} onClick={async () => {
-                    setRepairing(true); setRepairMsg('');
-                    const result = await repairAttendance(msg => setRepairMsg(msg));
-                    setRepairing(false);
-                    if (result.error) {
-                      setRepairMsg(`⚠ ${result.error}`);
-                    } else {
-                      setRepairMsg(`✅ Added ${result.added}, removed ${result.removed}`);
-                      // Re-check after repair
-                      try {
-                        const results = await checkSyncStatus(base);
-                        setSyncCheck(results);
-                      } catch {}
-                    }
-                  }}
-                    style={{ width:'100%', padding:'10px', borderRadius:8, border:'none',
-                      backgroundColor: repairing ? '#9ca3af' : '#b45309', color:'#fff',
-                      fontWeight:800, fontSize:13, cursor: repairing ? 'default' : 'pointer' }}>
-                    {repairing ? '⏳ Syncing missing records…' : '🔧 Sync Missing Attendance'}
-                  </button>
-                  {repairMsg && (
-                    <div style={{ fontSize:12, color:'#374151', marginTop:6, textAlign:'center' as const }}>
-                      {repairMsg}
+            {syncCheck && (
+              <div style={{ marginTop:8 }}>
+                {syncCheck.map(row => (
+                  <div key={row.table} style={{ padding:'6px 10px', borderRadius:8, marginBottom:4,
+                    backgroundColor: row.match ? '#f0fdf4' : '#fee2e2',
+                    border: `1px solid ${row.match ? '#86efac' : '#fca5a5'}` }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
+                      <span style={{ fontSize:12.5, fontWeight:700 }}>{row.table}</span>
+                      <span style={{ fontSize:11.5, color: row.match ? C.ok : '#dc2626', fontWeight:800 }}>
+                        {row.match ? `✅ ${row.local} = ${row.server}` : `⚠ device ${row.local} · server ${row.server}`}
+                      </span>
                     </div>
-                  )}
+                    {row.detail && <div style={{ fontSize:11, color:C.muted, marginTop:2 }}>{row.detail}</div>}
+                  </div>
+                ))}
+                {syncCheck.some(r => r.canRepair) && (
+                  <div style={{ marginTop:6 }}>
+                    <button disabled={repairing || anyRunning} onClick={async () => {
+                      setRepairing(true); setRepairMsg('');
+                      const result = await repairAttendance(msg => setRepairMsg(msg));
+                      setRepairing(false);
+                      if (result.error) {
+                        setRepairMsg(`⚠ ${result.error}`);
+                      } else {
+                        setRepairMsg(`✅ Added ${result.added}, removed ${result.removed}`);
+                        try {
+                          const results = await checkSyncStatus(base);
+                          setSyncCheck(results);
+                        } catch {}
+                      }
+                    }}
+                      style={{ width:'100%', padding:'9px', borderRadius:9, border:'none',
+                        backgroundColor: repairing ? '#e5e7eb' : C.amber, color: repairing ? C.muted : '#fff',
+                        fontWeight:800, fontSize:12.5, cursor: repairing ? 'default' : 'pointer' }}>
+                      {repairing ? '⏳ Syncing missing records…' : '🔧 Sync missing attendance'}
+                    </button>
+                    {repairMsg && <div style={{ fontSize:11.5, color:C.muted, marginTop:5, textAlign:'center' as const }}>{repairMsg}</div>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Re-upload by date */}
+          {can('sync:reupload') && (
+            <div style={{ padding:'9px 12px', borderTop:`1px solid ${C.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:7 }}>
+                <span style={{ fontSize:18, width:26, textAlign:'center' }}>🔄</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13.5, fontWeight:800 }}>Re-upload a day</div>
+                  <div style={{ fontSize:11.5, color:C.muted }}>Replaces your earlier upload for that day</div>
+                </div>
+              </div>
+              {availDates.length === 0 ? (
+                <div style={{ fontSize:12, color:C.muted, paddingLeft:36 }}>No attendance recorded on this device yet</div>
+              ) : (
+                <div style={{ display:'flex', flexWrap:'wrap' as const, gap:5, paddingLeft:36 }}>
+                  {availDates.map(d => (
+                    <button key={d} onClick={() => handleReupDateChange(reupDate === d ? '' : d)} style={{
+                      padding:'5px 9px', borderRadius:14, cursor:'pointer', fontSize:11.5, fontWeight:700,
+                      border:`1px solid ${reupDate === d ? C.green : C.border}`,
+                      backgroundColor: reupDate === d ? C.green : '#fff',
+                      color: reupDate === d ? '#fff' : C.text,
+                    }}>{fmtDay(d)}</button>
+                  ))}
+                </div>
+              )}
+              {reupDate && (
+                <div style={{ paddingLeft:36, marginTop:8 }}>
+                  {reupSessions.length === 0
+                    ? <div style={{ fontSize:12, color:C.muted }}>No sessions found for {fmtDay(reupDate)}</div>
+                    : <>
+                        <div style={{ display:'flex', gap:3, padding:3, borderRadius:8, backgroundColor:'#f3f4f6' }}>
+                          {reupSessions.map(sess => {
+                            const active = reupSelected.has(sess);
+                            return (
+                              <button key={sess} onClick={() => toggleReupSession(sess)} aria-pressed={active} style={{
+                                flex:1, height:28, borderRadius:6, border:'none', cursor:'pointer', fontWeight:700, fontSize:12,
+                                backgroundColor: active ? '#fff' : 'transparent', color: active ? C.green : C.muted,
+                                boxShadow: active ? '0 1px 2px rgba(0,0,0,0.12)' : 'none',
+                              }}>{active ? '✔ ' : ''}{sess}</button>
+                            );
+                          })}
+                        </div>
+                        <button onClick={runReupload} disabled={reupPhase === 'running' || reupSelected.size === 0 || anyRunning} style={{
+                          width:'100%', marginTop:7, padding:'9px', borderRadius:9, border:'none',
+                          backgroundColor: reupPhase === 'running' || reupSelected.size === 0 ? '#e5e7eb'
+                            : reupPhase === 'error' ? '#fee2e2' : reupPhase === 'done' ? C.okBg : C.green,
+                          color: reupPhase === 'running' || reupSelected.size === 0 ? C.muted
+                            : reupPhase === 'error' ? C.red : reupPhase === 'done' ? C.ok : '#fff',
+                          fontWeight:800, fontSize:12.5,
+                          cursor: reupPhase === 'running' || reupSelected.size === 0 ? 'not-allowed' : 'pointer',
+                        }}>
+                          {reupPhase === 'running' ? '⏳ Re-uploading…'
+                            : reupPhase === 'done'  ? `✔ Done — re-upload ${fmtDay(reupDate)} again`
+                            : reupPhase === 'error' ? '⚠ Error — retry'
+                            : `Re-upload ${fmtDay(reupDate)}`}
+                        </button>
+                      </>}
                 </div>
               )}
             </div>
           )}
-        </div>
 
-        {/* ── Full sync controls — admin/coach only ── */}
-        {isAdminOrCoach && (can('sync:students') || can('sync:download') || can('sync:payments')) && (
-          <div style={{ marginBottom:4 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, paddingLeft:2 }}>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-              <span style={{ fontSize:10, fontWeight:800, color:C.gold, letterSpacing:'1.5px', textTransform:'uppercase' as const }}>
-                ⬇ Download from Server
-              </span>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-            </div>
-
-            {/* Students */}
-            {can('sync:students') && <OpCard icon="👨‍🎓" title="Get Students" desc="Download student roster from server" accent={C.gold} phase={stuPhase} onRun={runStudents}>
-              <ModeChips value={stuMode} onChange={setStuMode} accent={C.gold} options={[
-                { val:'incremental', label:'Incremental', sub:'New since last sync' },
-                { val:'latest',      label:'Latest',      sub:'Most recent batch' },
-                { val:'full',        label:'Full',        sub:'Re-download all' },
-              ]} />
-              {stuMode === 'full' && (
-                <div style={{ marginTop:8, padding:'7px 10px', borderRadius:8, backgroundColor:C.red+'18', border:`1px solid ${C.red}44`, fontSize:11, color:C.red }}>
-                  ⚠ Full resets sync cursor — re-downloads all students
-                </div>
-              )}
-            </OpCard>}
-
-            {/* Hager */}
-            {can('sync:download') && <OpCard icon="📋" title="Hager Register" desc="Mirror full attendance history from server" accent={C.blue} phase={hagPhase} onRun={runHager}>
-              <ModeChips value={hagMode} onChange={setHagMode} accent={C.blue} options={[
-                { val:'smart', label:'Smart', sub: hagCount > 0 ? `Has ${hagCount} rows — fetch new only` : 'Auto full if empty' },
-                { val:'full',  label:'Full',  sub:'Wipe + re-download all' },
-              ]} />
-              {hagMode === 'full' && (
-                <div style={{ marginTop:8, padding:'7px 10px', borderRadius:8, backgroundColor:C.red+'18', border:`1px solid ${C.red}44`, fontSize:11, color:C.red }}>
-                  ⚠ Full wipes hist_attendance — safe, server is the source of truth
-                </div>
-              )}
-            </OpCard>}
-
-            {/* Payments */}
-            {can('sync:payments') && <OpCard icon="💰" title="Payments & Fees" desc="Sync payment history and fee dues" accent="#27ae60" phase={payPhase} onRun={runPayments}>
-              <ModeChips value={payMode} onChange={setPayMode} accent="#27ae60" options={[
-                { val:'smart', label:'Smart', sub: paymentsCount > 0 ? `Has ${paymentsCount} rows — fetch new only` : 'Auto full if empty' },
-                { val:'full',  label:'Full',  sub:'Re-download all payments' },
-              ]} />
-            </OpCard>}
-          </div>
-        )}
-
-        {/* ═══════════════════════════════════════════════════════
-            SECTION B — DATA UPLOAD (mobile → server)
-        ═══════════════════════════════════════════════════════ */}
-        {(can('sync:upload') || can('sync:reupload')) && (
-          <div style={{ marginBottom:4 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, paddingLeft:2 }}>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-              <span style={{ fontSize:10, fontWeight:800, color:'#16a085', letterSpacing:'1.5px', textTransform:'uppercase' as const }}>
-                ⬆ Upload to Server
-              </span>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-            </div>
-
-            {/* Upload attendance */}
-            {can('sync:upload') && <OpCard icon="⬆" title="Upload Attendance" desc={`Push ${pendCount} unsynced coach record(s) to server`} accent={C.teal} phase={upPhase} onRun={runUpload} />}
-
-            {/* Re-upload by date */}
-            {can('sync:reupload') && <div style={{ backgroundColor:C.card, borderRadius:14, border:`1.5px solid ${reupPhase !== 'idle' ? '#8e44ad' : C.border}`, overflow:'hidden' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:12, padding:'13px 14px 10px' }}>
-                <span style={{ fontSize:22 }}>🔄</span>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14, fontWeight:800, color:C.text }}>Re-upload by Date</div>
-                  <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>Force re-send a specific date — replaces your previous upload on server</div>
-                </div>
-              </div>
-              <div style={{ padding:'0 14px 14px', display:'flex', flexDirection:'column' as const, gap:10 }}>
-                <div>
-                  <div style={{ fontSize:10, color:C.muted, textTransform:'uppercase' as const, letterSpacing:'0.5px', marginBottom:6, fontWeight:700 }}>Select Date</div>
-                  {availDates.length === 0 ? (
-                    <div style={{ fontSize:12, color:C.muted, padding:'8px 0' }}>No attendance recorded locally yet</div>
-                  ) : (
-                    <div style={{ display:'flex', flexWrap:'wrap' as const, gap:6 }}>
-                      {availDates.map(d => (
-                        <button key={d} onClick={() => handleReupDateChange(reupDate === d ? '' : d)} style={{
-                          padding:'5px 10px', borderRadius:8, border:'none', cursor:'pointer',
-                          fontSize:12, fontWeight:700,
-                          backgroundColor: reupDate === d ? '#8e44ad33' : '#0a1209',
-                          color: reupDate === d ? '#c39bd3' : C.muted,
-                          outline: `1.5px solid ${reupDate === d ? '#8e44ad' : C.border}`,
-                        }}>{d}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {reupDate && reupSessions.length > 0 && (
-                  <div>
-                    <div style={{ fontSize:10, color:C.muted, textTransform:'uppercase' as const, letterSpacing:'0.5px', marginBottom:6, fontWeight:700 }}>Sessions</div>
-                    <div style={{ display:'flex', gap:8 }}>
-                      {reupSessions.map(sess => {
-                        const active = reupSelected.has(sess);
-                        return (
-                          <button key={sess} onClick={() => toggleReupSession(sess)} style={{
-                            flex:1, padding:'8px 0', borderRadius:8, border:'none', cursor:'pointer',
-                            fontWeight:800, fontSize:13,
-                            backgroundColor: active ? '#8e44ad33' : '#0a1209',
-                            color: active ? '#c39bd3' : C.muted,
-                            outline: `1.5px solid ${active ? '#8e44ad' : C.border}`,
-                          }}>{active ? '✔ ' : ''}{sess}</button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {reupDate && reupSessions.length === 0 && (
-                  <div style={{ fontSize:12, color:C.muted }}>No sessions found for {reupDate}</div>
-                )}
-                {reupDate && reupSessions.length > 0 && (
-                  <button onClick={runReupload} disabled={reupPhase === 'running' || reupSelected.size === 0} style={{
-                    width:'100%', padding:'11px', borderRadius:10, border:'none',
-                    backgroundColor: reupPhase === 'running' ? C.border : reupPhase === 'done' ? '#4caf77' : reupPhase === 'error' ? C.red : '#8e44ad',
-                    color:'#fff', fontWeight:800, fontSize:13,
-                    cursor: reupPhase === 'running' ? 'not-allowed' : 'pointer',
-                    boxShadow: reupPhase === 'running' ? 'none' : '0 3px 10px #8e44ad55',
-                  }}>
-                    {reupPhase === 'running' ? '⏳  Re-uploading…' : reupPhase === 'done' ? '✔  Done — Re-upload again' : reupPhase === 'error' ? '⚠  Error — Retry' : `🔄  Re-upload ${reupDate}`}
-                  </button>
-                )}
-              </div>
-            </div>}
-          </div>
-        )}
-
-        {/* ═══════════════════════════════════════════════════════
-            OPERATION LOG
-        ═══════════════════════════════════════════════════════ */}
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8, paddingLeft:2 }}>
-          <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-          <span style={{ fontSize:10, fontWeight:800, color:C.muted, letterSpacing:'1.5px', textTransform:'uppercase' as const }}>
-            📋 Operation Log
-          </span>
-          <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-        </div>
-        <LogView lines={log} />
-
-        {/* Run All — only shown if user has permission */}
-        {can('sync:runall') && (
-          <>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:4 }}>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-              <span style={{ fontSize:10, fontWeight:800, color:'#4caf77', letterSpacing:'1.5px', textTransform:'uppercase' as const }}>
-                ⚡ Quick Actions
-              </span>
-              <div style={{ height:1, flex:1, backgroundColor:C.border }} />
-            </div>
-            <button onClick={runAll} disabled={anyRunning} style={{
-              width:'100%', padding:16, borderRadius:13, border:'none',
-              backgroundColor: anyRunning ? C.border : C.green,
-              color: anyRunning ? C.muted : '#fff',
-              fontWeight:800, fontSize:14, letterSpacing:'0.8px',
-              cursor: anyRunning ? 'not-allowed' : 'pointer',
-              boxShadow: anyRunning ? 'none' : `0 4px 16px ${C.green}66`,
-            }}>
-              {anyRunning ? '⏳  Running…' : '▶▶  RUN ALL OPERATIONS'}
-            </button>
-          </>
-        )}
-
-        {/* Timestamps */}
-        <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
-          {lastStu      && <div style={{ fontSize:11, color:C.muted, textAlign:'center' }}>Last student sync: <span style={{ color:C.text }}>{lastStu}</span></div>}
-          {lastHag      && <div style={{ fontSize:11, color:C.muted, textAlign:'center' }}>Last Hager pull: <span style={{ color:C.text }}>{lastHag}</span></div>}
-          {lastPayments && <div style={{ fontSize:11, color:C.muted, textAlign:'center' }}>Last payments sync: <span style={{ color:C.text }}>{lastPayments}</span></div>}
-        </div>
-
-        {/* Nav shortcuts */}
-        <div style={{ display:'flex', gap:8 }}>
-          {[{l:'👨‍🎓 Students',p:'/students'},{l:'📊 Dashboard',p:'/dashboard'},{l:'✅ Attendance',p:'/attendance'}].map(n => (
-            <button key={n.p} onClick={() => navigate(n.p)} style={{ flex:1, padding:'10px 4px', borderRadius:10, border:`1px solid ${C.border}`, backgroundColor:C.card, color:C.muted, cursor:'pointer', fontSize:11, fontWeight:600 }}>
-              {n.l}
-            </button>
-          ))}
-        </div>
+          {/* Full refresh lives in Settings */}
+          <button onClick={() => navigate('/settings')} style={{ width:'100%', display:'flex', alignItems:'center', gap:10,
+            padding:'10px 12px', background:'none', border:'none', borderTop:`1px solid ${C.border}`, cursor:'pointer', textAlign:'left' as const }}>
+            <span style={{ fontSize:18, width:26, textAlign:'center' }}>♻️</span>
+            <span style={{ flex:1, minWidth:0 }}>
+              <span style={{ display:'block', fontSize:13.5, fontWeight:800, color:C.text }}>Full refresh</span>
+              <span style={{ display:'block', fontSize:11.5, color:C.muted }}>Clear this device and re-download — in Settings</span>
+            </span>
+            <span style={{ color:C.muted, fontSize:16 }}>›</span>
+          </button>
+        </details>
 
       </div>
+      <style>{`@keyframes ss-slide { 0%{width:5%} 50%{width:80%} 100%{width:95%} }`}</style>
     </div>
   );
 }

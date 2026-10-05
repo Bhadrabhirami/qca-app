@@ -1,21 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-// Fetch with timeout — prevents hanging requests
-const fetchT = (url: string, opts: RequestInit = {}, ms = 10000): Promise<Response> => {
-  const ctrl = new AbortController();
-  const tid = setTimeout(() => ctrl.abort(), ms);
-  return fetchT(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(tid));
-};
-
-
 import {
   syncAllStudents, getStudentCount,
   getUnsyncedAttendance, markAttendanceSynced, getPendingUploadCount,
+  getPendingTempStudents, resolveTempStudent,
 } from '../database/db';
 import ScreenHeader from '../shared/ScreenHeader';
+import { usePermissions } from './usePermissions';
+import { apiAuthHeaders } from './apiHeaders';
 
-const C = { green: '#1a472a', gold: '#d4af37', bg: '#f4f7f6', border: '#e8e8e8', gray: '#888' };
+// Quick sync: the two everyday jobs (student roster down, attendance up).
+// Uses the same /api/data endpoints, JWT auth and upload rules as the full
+// Sync screen (Syncscreen.tsx) — keep the two in step.
+
+// Fetch with timeout — prevents hanging requests
+const fetchT = (url: string, opts: RequestInit = {}, ms = 30000): Promise<Response> => {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(tid));
+};
+
+const C = { green: '#1a472a', gold: '#d4af37', bg: '#f4f7f6', border: '#e8e8e8', gray: '#888', red: '#c0392b', amber: '#e67e22' };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,107 +36,81 @@ interface SummaryData {
   duration: string;
 }
 
+const ts = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+const buildBaseUrl = (ip: string): string => {
+  const clean = (ip || '').trim().replace(/\/+$/, '');
+  return clean.startsWith('http') ? clean : `http://${clean}`;
+};
+
+/** Signed in with a live token? (the server accepts nothing else) */
+const hasLiveToken = () =>
+  !!localStorage.getItem('jwt_token') &&
+  Date.now() < parseInt(localStorage.getItem('jwt_expiry') || '0', 10);
+
 // ─── Summary popup ────────────────────────────────────────────────────────────
 
 function SummaryModal({ data, onClose }: { data: SummaryData; onClose: () => void }) {
-  const iconColor: Record<string, string> = {
-    info: C.gray, ok: C.green, warn: '#e67e22', error: '#c0392b',
-  };
-  const prefix: Record<string, string> = {
-    info: '  ›', ok: '  ✔', warn: '  ⚠', error: '  ✖',
-  };
+  const color: Record<string, string> = { info: C.gray, ok: C.green, warn: C.amber, error: C.red };
+  const prefix: Record<string, string> = { info: '›', ok: '✔', warn: '⚠', error: '✖' };
   return (
     <div style={M.overlay} onClick={onClose}>
       <div style={M.sheet} onClick={e => e.stopPropagation()}>
-        {/* Header */}
-        <div style={{
-          ...M.header,
-          backgroundColor: data.status === 'success' ? C.green : '#c0392b',
-        }}>
-          <span style={M.headerIcon}>{data.icon}</span>
-          <div style={{ flex: 1 }}>
+        <div style={{ ...M.header, backgroundColor: data.status === 'success' ? C.green : C.red }}>
+          <span style={{ fontSize: 24 }}>{data.icon}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <p style={M.headerTitle}>{data.title}</p>
             <p style={M.headerSub}>
-              {data.status === 'success' ? 'Completed successfully' : 'Completed with errors'}
-              &nbsp;·&nbsp;{data.duration}
+              {data.status === 'success' ? 'Completed' : 'Failed'} · {data.duration}
             </p>
           </div>
-          <button onClick={onClose} style={M.closeBtn}>✕</button>
+          <button onClick={onClose} aria-label="Close" style={M.closeBtn}>✕</button>
         </div>
-
-        {/* Log lines */}
         <div style={M.logPane}>
-          <p style={M.logHeader}>OPERATION LOG</p>
           {data.entries.map((e, i) => (
             <div key={i} style={M.logRow}>
-              <span style={{ ...M.logPrefix, color: iconColor[e.level] }}>
-                {prefix[e.level]}
-              </span>
-              <span style={{ ...M.logText, color: iconColor[e.level] }}>{e.text}</span>
+              <span style={{ width: 14, flexShrink: 0, fontWeight: 700, color: color[e.level] }}>{prefix[e.level]}</span>
+              <span style={{ flex: 1, color: color[e.level] }}>{e.text}</span>
               <span style={M.logTime}>{e.time}</span>
             </div>
           ))}
         </div>
-
-        <button onClick={onClose} style={M.doneBtn}>Close</button>
       </div>
     </div>
   );
 }
 
-// ─── Action card ──────────────────────────────────────────────────────────────
+// ─── Action row ───────────────────────────────────────────────────────────────
 
-function ActionCard({
-  icon, title, description, accent, state, meta,
-  onPress, onViewLog, lastLog,
+function ActionRow({
+  icon, title, meta, accent, state, disabled, onPress, onViewLog, lastLog,
 }: {
-  icon: string; title: string; description: string; accent: string;
-  state: ActionState; meta: string;
-  onPress: () => void; onViewLog: () => void; lastLog: SummaryData | null;
+  icon: string; title: string; meta: string; accent: string; state: ActionState;
+  disabled?: string; onPress: () => void; onViewLog: () => void; lastLog: SummaryData | null;
 }) {
-  const stateLabel: Record<ActionState, string> = {
-    idle:    '', running: 'Running…', done: 'Done', error: 'Failed',
-  };
-  const stateColor: Record<ActionState, string> = {
-    idle: C.gray, running: '#e67e22', done: C.green, error: '#c0392b',
-  };
-
+  const running = state === 'running';
+  const status = state === 'done' ? { t: '✔ Done', c: C.green }
+               : state === 'error' ? { t: '✖ Failed', c: C.red } : null;
   return (
-    <div style={{ ...AC.card, borderLeft: `5px solid ${accent}` }}>
-      <div style={AC.top}>
-        <span style={{ fontSize: '36px' }}>{icon}</span>
-        <div style={{ flex: 1 }}>
-          <p style={AC.title}>{title}</p>
-          <p style={AC.desc}>{description}</p>
-          <p style={{ ...AC.meta, color: C.gold }}>{meta}</p>
+    <div style={{ padding: '10px 12px', position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 22, width: 28, textAlign: 'center' }}>{icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: '#222' }}>{title}</div>
+          <div style={{ fontSize: 11.5, color: disabled ? C.red : C.gray, marginTop: 1 }}>{disabled || meta}</div>
+          {lastLog && (
+            <button onClick={onViewLog} style={S.logLink}>
+              {status && <b style={{ color: status.c }}>{status.t}</b>} · View log ›
+            </button>
+          )}
         </div>
-      </div>
-      {state === 'running' && (
-        <div style={AC.progressBar}>
-          <div style={{ ...AC.progressFill, backgroundColor: accent }} />
-        </div>
-      )}
-      <div style={AC.btnRow}>
-        <button
-          style={{
-            ...AC.mainBtn,
-            backgroundColor: state === 'running' ? '#ccc' : accent,
-            cursor: state === 'running' ? 'not-allowed' : 'pointer',
-          }}
-          disabled={state === 'running'}
-          onClick={onPress}
-        >
-          {state === 'running' ? 'RUNNING…' : title.toUpperCase()}
+        <button onClick={onPress} disabled={running || !!disabled}
+          style={{ ...S.runBtn, backgroundColor: running || disabled ? '#c8c8c8' : accent,
+            cursor: running || disabled ? 'not-allowed' : 'pointer' }}>
+          {running ? 'Running…' : 'Run'}
         </button>
-        {lastLog && (
-          <button onClick={onViewLog} style={AC.logBtn}>
-            <span style={{ color: stateColor[state], fontWeight: '700', marginRight: '5px' }}>
-              {stateLabel[state] || '✔ Done'}
-            </span>
-            View Log ›
-          </button>
-        )}
       </div>
+      {running && <div style={S.progressBar}><div style={{ ...S.progressFill, backgroundColor: accent }} /></div>}
     </div>
   );
 }
@@ -138,240 +118,178 @@ function ActionCard({
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function SyncScreen() {
-  const navigate  = useNavigate();
-  const [serverIp, setServerIp] = useState('Not Configured');
-  const [authUser, setAuthUser] = useState('Guest');
-  const [studentCount,  setStudentCount]  = useState(0);
-  const [pendingCount,  setPendingCount]  = useState(0);
+  const navigate = useNavigate();
+  const { can } = usePermissions();
+  const serverIp = localStorage.getItem('server_ip') || '';
+  const authUser = localStorage.getItem('auth_user') || '';
+  const [studentCount, setStudentCount] = useState(0);
+  const [pendingCount, setPendingCount] = useState(0);
 
-  const [dlState,  setDlState]  = useState<ActionState>('idle');
-  const [ulState,  setUlState]  = useState<ActionState>('idle');
-  const [dlLog,    setDlLog]    = useState<SummaryData | null>(null);
-  const [ulLog,    setUlLog]    = useState<SummaryData | null>(null);
-  const [showLog,  setShowLog]  = useState<SummaryData | null>(null);
-
-  useEffect(() => {
-    setServerIp(localStorage.getItem('server_ip') || 'Not Configured');
-    setAuthUser(localStorage.getItem('auth_user') || 'Guest');
-    refreshCounts();
-  }, []);
+  const [dlState, setDlState] = useState<ActionState>('idle');
+  const [ulState, setUlState] = useState<ActionState>('idle');
+  const [dlLog,   setDlLog]   = useState<SummaryData | null>(null);
+  const [ulLog,   setUlLog]   = useState<SummaryData | null>(null);
+  const [showLog, setShowLog] = useState<SummaryData | null>(null);
 
   const refreshCounts = async () => {
     setStudentCount(await getStudentCount());
     setPendingCount(await getPendingUploadCount());
   };
+  useEffect(() => { refreshCounts(); }, []);
 
-  const ts = () => new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-  const buildBaseUrl = (ip: string): string => {
-    // Use server_ip exactly as stored — includes correct port already
-    const clean = ip.trim().replace(/\/+$/, '');
-    return clean.startsWith('http') ? clean : `http://${clean}`;
+  /** Shared runner: timing, log, state and summary for one action. */
+  const run = async (
+    title: string, icon: string,
+    setState: (s: ActionState) => void, setLast: (d: SummaryData | null) => void,
+    body: (log: (l: LogEntry['level'], t: string) => void, base: string) => Promise<void>,
+  ) => {
+    const start = Date.now();
+    const entries: LogEntry[] = [];
+    const log = (level: LogEntry['level'], text: string) => entries.push({ time: ts(), level, text });
+    setState('running'); setLast(null);
+    let ok = true;
+    try {
+      if (!serverIp) throw new Error('No server configured — set it in Settings');
+      if (!hasLiveToken()) throw new Error('Session expired — sign in again, then retry');
+      await body(log, buildBaseUrl(serverIp));
+    } catch (err: any) {
+      ok = false;
+      const msg = err?.name === 'AbortError' ? 'Server did not respond in time' : (err?.message ?? String(err));
+      if (/failed to fetch|network/i.test(msg)) log('warn', 'Network error — check Wi-Fi / server address');
+      log('error', msg);
+    }
+    await refreshCounts();
+    const summary: SummaryData = {
+      title, icon, status: ok ? 'success' : 'error', entries,
+      duration: `${((Date.now() - start) / 1000).toFixed(1)}s`,
+    };
+    setState(ok ? 'done' : 'error'); setLast(summary); setShowLog(summary);
   };
 
-  const headers = () => ({
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'X-User-ID': authUser,
-    'Authorization': `Bearer ${localStorage.getItem('secret_key') || authUser}`,
+  // ── Download Students (full roster) ──────────────────────────────────────
+  const downloadStudents = () => run('Download Students', '📥', setDlState, setDlLog, async (log, base) => {
+    log('info', `Connecting to ${base}…`);
+    const res = await fetchT(`${base}/api/data/students?since_id=0&limit=50000`, { headers: apiAuthHeaders(false) });
+    if (res.status === 401) throw new Error('Unauthorized — sign in again');
+    if (res.status === 403) throw new Error('Your role is not allowed to download students');
+    if (!res.ok) throw new Error(`Server responded with HTTP ${res.status}`);
+
+    const data: any[] = (await res.json()).data || [];
+    log('ok', `Received ${data.length} student records`);
+    if (data.length === 0) { log('warn', 'Server returned 0 students — nothing saved'); return; }
+
+    await syncAllStudents(data);
+    const active = data.filter((s: any) => s.status === 'Active').length;
+    log('ok', `Saved ${data.length} students (${active} active, ${data.length - active} other)`);
+
+    // Keep the incremental sync's bookmark in step with what we now hold
+    const maxId  = Math.max(...data.map((s: any) => s.id ?? 0));
+    const lastId = parseInt(localStorage.getItem('last_sync_student_id') || '0', 10);
+    if (maxId > lastId) localStorage.setItem('last_sync_student_id', String(maxId));
+    localStorage.setItem('last_sync_time', new Date().toLocaleString());
   });
 
-  // ── Download Students ────────────────────────────────────────────────────
-  const downloadStudents = async () => {
-    if (serverIp === 'Not Configured') {
-      alert('Set server IP in Settings first.');
-      return;
-    }
-    const start   = Date.now();
-    const entries: LogEntry[] = [];
-    const log = (level: LogEntry['level'], text: string) =>
-      entries.push({ time: ts(), level, text });
-
-    setDlState('running');
-    setDlLog(null);
-
-    try {
-      log('info', `Connecting to ${serverIp}…`);
-      const baseUrl = buildBaseUrl(serverIp);
-      const res = await fetchT(`${baseUrl}/api/sync/students`, {
-        method: 'GET', headers: headers(),
-      });
-
-      if (!res.ok) {
-        if (res.status === 401) throw new Error('Unauthorized — check credentials');
-        throw new Error(`Server responded with HTTP ${res.status}`);
-      }
-      log('ok', `Server responded HTTP ${res.status}`);
-
-      const result = await res.json();
-      const data: any[] = result.data || result.students || result || [];
-      log('info', `Received ${data.length} student records`);
-
-      if (data.length === 0) {
-        log('warn', 'Server returned 0 students — nothing saved');
-      } else {
-        log('info', 'Saving to local database…');
-        await syncAllStudents(data);
-        const active   = data.filter((s: any) => s.status === 'Active').length;
-        const inactive = data.length - active;
-        log('ok', `Saved ${data.length} students (${active} active, ${inactive} inactive)`);
-      }
-
-      await refreshCounts();
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      log('ok', `Download complete in ${elapsed}s`);
-
-      setDlState('done');
-      setDlLog({ title: 'Download Students', icon: '📥', status: 'success', entries, duration: `${elapsed}s` });
-      setShowLog({ title: 'Download Students', icon: '📥', status: 'success', entries, duration: `${elapsed}s` });
-    } catch (err: any) {
-      log('error', err.message ?? String(err));
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      const summary: SummaryData = { title: 'Download Students', icon: '📥', status: 'error', entries, duration: `${elapsed}s` };
-      setDlState('error');
-      setDlLog(summary);
-      setShowLog(summary);
-    }
-  };
-
   // ── Upload Attendance ────────────────────────────────────────────────────
-  const uploadAttendance = async () => {
-    if (serverIp === 'Not Configured') {
-      alert('Set server IP in Settings first.');
-      return;
-    }
-    const start   = Date.now();
-    const entries: LogEntry[] = [];
-    const log = (level: LogEntry['level'], text: string) =>
-      entries.push({ time: ts(), level, text });
+  const uploadAttendance = () => run('Upload Attendance', '📤', setUlState, setUlLog, async (log, base) => {
+    const headers = apiAuthHeaders();
 
-    setUlState('running');
-    setUlLog(null);
-
-    try {
-      log('info', 'Scanning local DB for unsynced records…');
-      const unsync = await getUnsyncedAttendance();
-      log(unsync.length === 0 ? 'warn' : 'info',
-        `Found ${unsync.length} record${unsync.length !== 1 ? 's' : ''} pending upload`);
-
-      if (unsync.length === 0) {
-        const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-        log('ok', 'Nothing to upload — all records are already synced');
-        setUlState('done');
-        const summary: SummaryData = { title: 'Upload Attendance', icon: '📤', status: 'success', entries, duration: `${elapsed}s` };
-        setUlLog(summary);
-        setShowLog(summary);
-        return;
-      }
-
-      log('info', `Uploading ${unsync.length} records to ${serverIp}…`);
-      const baseUrl = buildBaseUrl(serverIp);
-      const res = await fetchT(`${baseUrl}/api/upload/attendance`, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify({ attendance: unsync }),
+    // 1. Temp students must exist on the server before their attendance can go up
+    const temps = await getPendingTempStudents();
+    for (const tmp of temps) {
+      log('info', `Registering new student ${tmp.name}…`);
+      const r = await fetchT(`${base}/api/data/students/register`, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          name: tmp.name, date_of_birth: tmp.date_of_birth, status: tmp.status,
+          student_category: tmp.student_category, enrollment_date: tmp.enrollment_date,
+        }),
       });
-
-      if (!res.ok) {
-        throw new Error(`Server responded with HTTP ${res.status}`);
-      }
-      log('ok', `Server accepted the upload (HTTP ${res.status})`);
-
-      const ids = unsync.map((r: any) => r.session_id);
-      await markAttendanceSynced(ids);
-      log('ok', `Marked ${ids.length} records as synced in local DB`);
-
-      // Breakdown by session type
-      const bySession: Record<string, number> = {};
-      unsync.forEach((r: any) => {
-        bySession[r.session_type] = (bySession[r.session_type] || 0) + 1;
-      });
-      Object.entries(bySession).forEach(([s, n]) => log('info', `  ${s}: ${n} records`));
-
-      const presentCount = unsync.filter((r: any) => r.status === 1).length;
-      log('info', `  Present: ${presentCount}  |  Absent: ${unsync.length - presentCount}`);
-
-      await refreshCounts();
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      log('ok', `Upload complete in ${elapsed}s`);
-
-      setUlState('done');
-      const summary: SummaryData = { title: 'Upload Attendance', icon: '📤', status: 'success', entries, duration: `${elapsed}s` };
-      setUlLog(summary);
-      setShowLog(summary);
-    } catch (err: any) {
-      log('error', err.message ?? String(err));
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      const summary: SummaryData = { title: 'Upload Attendance', icon: '📤', status: 'error', entries, duration: `${elapsed}s` };
-      setUlState('error');
-      setUlLog(summary);
-      setShowLog(summary);
+      const j = await r.json().catch(() => ({}));
+      const serverId = j.student_id ?? j.id;
+      if (!r.ok || !serverId) { log('warn', `Could not register ${tmp.name}: ${j.error || 'HTTP ' + r.status} — their records stay pending`); continue; }
+      await resolveTempStudent(tmp.temp_id, serverId);
+      log('ok', `${tmp.name} registered (ID ${serverId})`);
     }
-  };
+
+    // 2. Pending attendance (temp students that failed to register stay local)
+    const unsync = (await getUnsyncedAttendance()).filter((r: any) => r.student_id > 0);
+    if (unsync.length === 0) { log('ok', 'Nothing to upload — all records are synced'); return; }
+
+    const records = unsync.map((r: any) => ({
+      student_id: r.student_id,
+      date:       r.attendance_date,
+      session:    r.session_type,
+      status:     (r.status === 1 || r.status === '1') ? 'PRESENT' : 'ABSENT',
+    }));
+    const groups = new Map<string, number>();
+    records.forEach(r => groups.set(`${r.date} ${r.session}`, (groups.get(`${r.date} ${r.session}`) ?? 0) + 1));
+    groups.forEach((n, k) => log('info', `${k}: ${n} record${n === 1 ? '' : 's'}`));
+    const present = records.filter(r => r.status === 'PRESENT').length;
+    log('info', `Uploading ${records.length} (present ${present}, absent ${records.length - present})…`);
+
+    const res = await fetchT(`${base}/api/data/upload/attendance`, {
+      method: 'POST', headers, body: JSON.stringify({ temp_attendance: records }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      // Never mark synced on failure — records stay pending and re-uploading is safe
+      throw new Error(`Upload failed (${res.status}): ${e.error ?? e.message ?? res.statusText} — records kept pending`);
+    }
+    const body = await res.json().catch(() => ({}));
+    if (body.replaced) log('info', `Server replaced ${body.replaced} earlier row(s) from you`);
+    log('ok', `${body.inserted ?? records.length} record(s) saved on server`);
+
+    await markAttendanceSynced(unsync.map((r: any) => r.session_id));
+    log('ok', `Marked ${unsync.length} local record(s) as synced`);
+  });
+
+  const canUpload = can('sync:upload');
 
   return (
     <div style={S.page}>
-      <ScreenHeader title="Data Sync" subtitle="Quickies Cricket Academy" />
+      <ScreenHeader title="Quick Sync" subtitle="Students down · attendance up" />
 
-      {/* Server info card */}
-      <div style={S.serverCard}>
-        <div style={S.serverRow}>
-          <span style={S.serverIcon}>🌐</span>
-          <div>
-            <p style={S.serverLabel}>SERVER</p>
-            <p style={S.serverValue}>{serverIp}</p>
+      <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Server + local DB */}
+        <div style={S.card}>
+          <div style={S.infoRow}>
+            <span style={S.infoLabel}>Server</span>
+            <span style={{ ...S.infoValue, color: serverIp ? '#333' : C.red }}>{serverIp || 'Not configured'}</span>
+            <button onClick={() => navigate('/settings')} style={S.configBtn}>Configure</button>
           </div>
-          <button onClick={() => navigate('/settings')} style={S.configBtn}>Configure</button>
-        </div>
-        <div style={S.divider} />
-        <div style={S.serverRow}>
-          <span style={S.serverIcon}>👤</span>
-          <div>
-            <p style={S.serverLabel}>USER</p>
-            <p style={S.serverValue}>{authUser}</p>
-          </div>
-          <div style={S.dbMeta}>
-            <p style={S.dbMetaLine}>📋 {studentCount} students locally</p>
-            <p style={S.dbMetaLine}>⏳ {pendingCount} records pending</p>
+          <div style={{ ...S.infoRow, borderTop: `1px solid ${C.border}` }}>
+            <span style={S.infoLabel}>User</span>
+            <span style={S.infoValue}>{authUser || '—'}</span>
+            <span style={{ fontSize: 11.5, color: C.gray, whiteSpace: 'nowrap' }}>
+              📋 {studentCount} · <b style={{ color: pendingCount ? C.amber : C.green }}>⏳ {pendingCount}</b>
+            </span>
           </div>
         </div>
+
+        {/* Actions */}
+        <div style={S.card}>
+          <ActionRow
+            icon="📥" title="Download Students" accent={C.green} state={dlState}
+            meta={studentCount > 0 ? `Full roster refresh · ${studentCount} on this device` : 'Device has no students yet'}
+            onPress={downloadStudents} onViewLog={() => dlLog && setShowLog(dlLog)} lastLog={dlLog}
+          />
+          <div style={{ height: 1, backgroundColor: C.border }} />
+          <ActionRow
+            icon="📤" title="Upload Attendance" accent={C.green} state={ulState}
+            disabled={canUpload ? undefined : '🔒 Your role cannot upload attendance'}
+            meta={pendingCount > 0 ? `${pendingCount} record${pendingCount === 1 ? '' : 's'} waiting to upload` : 'All records synced ✔'}
+            onPress={uploadAttendance} onViewLog={() => ulLog && setShowLog(ulLog)} lastLog={ulLog}
+          />
+        </div>
+
+        <button onClick={() => navigate('/syncscreen')} style={S.moreLink}>
+          More sync options (payments, history, repair) ›
+        </button>
       </div>
 
-      {/* Action cards */}
-      <div style={S.cards}>
-        <ActionCard
-          icon="📥"
-          title="Download Students"
-          description="Pull the latest student roster from the server and update your local database."
-          accent="#2a5a8a"
-          state={dlState}
-          meta={studentCount > 0 ? `${studentCount} students in local DB` : 'Local DB is empty'}
-          onPress={downloadStudents}
-          onViewLog={() => dlLog && setShowLog(dlLog)}
-          lastLog={dlLog}
-        />
+      {showLog && <SummaryModal data={showLog} onClose={() => setShowLog(null)} />}
 
-        <ActionCard
-          icon="📤"
-          title="Upload Attendance"
-          description="Push all locally recorded attendance that hasn't been synced to the server yet."
-          accent={C.green}
-          state={ulState}
-          meta={pendingCount > 0 ? `${pendingCount} records pending upload` : 'All records synced ✔'}
-          onPress={uploadAttendance}
-          onViewLog={() => ulLog && setShowLog(ulLog)}
-          lastLog={ulLog}
-        />
-      </div>
-
-      {/* Summary popup */}
-      {showLog && (
-        <SummaryModal data={showLog} onClose={() => setShowLog(null)} />
-      )}
-
-      <style>{`
-        @keyframes slide { 0%{width:5%} 50%{width:80%} 100%{width:95%} }
-      `}</style>
+      <style>{`@keyframes qs-slide { 0%{width:5%} 50%{width:80%} 100%{width:95%} }`}</style>
     </div>
   );
 }
@@ -379,49 +297,27 @@ export default function SyncScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const S: Record<string, React.CSSProperties> = {
-  page:        { backgroundColor: C.bg, minHeight: '100vh', fontFamily: 'sans-serif', paddingBottom: '40px' },
-  header:      { backgroundColor: C.green, display: 'flex', alignItems: 'center', gap: '14px', padding: '14px 18px', paddingTop: '50px' },
-  backBtn:     { background: 'none', border: 'none', color: '#fff', fontSize: '26px', cursor: 'pointer', lineHeight: 1, padding: '4px' },
-  headerTitle: { color: '#fff', fontWeight: '700', fontSize: '20px', margin: 0 },
-  headerSub:   { color: C.gold, fontSize: '12px', margin: '2px 0 0 0', letterSpacing: '0.5px' },
-  serverCard:  { margin: '16px', backgroundColor: '#fff', borderRadius: '14px', padding: '16px', boxShadow: '0 2px 6px rgba(0,0,0,0.08)' },
-  serverRow:   { display: 'flex', alignItems: 'center', gap: '12px' },
-  serverIcon:  { fontSize: '24px', flexShrink: 0 },
-  serverLabel: { fontSize: '10px', fontWeight: '800', color: C.gray, letterSpacing: '1px', margin: 0, textTransform: 'uppercase' },
-  serverValue: { fontSize: '14px', color: '#333', fontWeight: '600', margin: '2px 0 0 0' },
-  configBtn:   { marginLeft: 'auto', backgroundColor: '#f0f4f0', color: C.green, border: 'none', borderRadius: '8px', padding: '6px 12px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' },
-  divider:     { height: '1px', backgroundColor: C.border, margin: '12px 0' },
-  dbMeta:      { marginLeft: 'auto', textAlign: 'right' },
-  dbMetaLine:  { fontSize: '12px', color: C.gray, margin: '2px 0 0 0' },
-  cards:       { padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '14px' },
-};
-
-const AC: Record<string, React.CSSProperties> = {
-  card:        { backgroundColor: '#fff', borderRadius: '14px', padding: '18px', boxShadow: '0 2px 6px rgba(0,0,0,0.08)' },
-  top:         { display: 'flex', gap: '14px', alignItems: 'flex-start', marginBottom: '14px' },
-  title:       { fontWeight: '700', fontSize: '17px', color: '#222', margin: 0 },
-  desc:        { fontSize: '13px', color: C.gray, margin: '4px 0 6px 0', lineHeight: '1.4' },
-  meta:        { fontSize: '12px', fontWeight: '600', margin: 0 },
-  progressBar: { height: '4px', backgroundColor: C.border, borderRadius: '2px', overflow: 'hidden', marginBottom: '12px' },
-  progressFill:{ height: '100%', borderRadius: '2px', animation: 'slide 2s ease-in-out infinite' },
-  btnRow:      { display: 'flex', alignItems: 'center', gap: '10px' },
-  mainBtn:     { flex: 1, color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontWeight: '800', fontSize: '14px', letterSpacing: '0.5px' },
-  logBtn:      { background: 'none', border: 'none', fontSize: '12px', color: C.gray, cursor: 'pointer', whiteSpace: 'nowrap', padding: '8px 4px' },
+  page:        { backgroundColor: C.bg, minHeight: '100%', fontFamily: 'sans-serif', paddingBottom: 24 },
+  card:        { backgroundColor: '#fff', borderRadius: 12, border: `1px solid ${C.border}`, overflow: 'hidden' },
+  infoRow:     { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', minHeight: 36 },
+  infoLabel:   { width: 46, flexShrink: 0, fontSize: 10, fontWeight: 800, color: C.gray, letterSpacing: '0.8px', textTransform: 'uppercase' },
+  infoValue:   { flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: '#333', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  configBtn:   { backgroundColor: '#f0f4f0', color: C.green, border: 'none', borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' },
+  runBtn:      { flexShrink: 0, color: '#fff', border: 'none', borderRadius: 9, padding: '8px 16px', fontWeight: 800, fontSize: 13 },
+  logLink:     { background: 'none', border: 'none', padding: '3px 0 0', fontSize: 11.5, color: C.gray, cursor: 'pointer' },
+  progressBar: { height: 3, backgroundColor: C.border, borderRadius: 2, overflow: 'hidden', marginTop: 8 },
+  progressFill:{ height: '100%', borderRadius: 2, animation: 'qs-slide 2s ease-in-out infinite' },
+  moreLink:    { background: 'none', border: 'none', color: C.green, fontWeight: 700, fontSize: 12.5, padding: '6px', cursor: 'pointer' },
 };
 
 const M: Record<string, React.CSSProperties> = {
-  overlay:     { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'flex-end', zIndex: 2000 },
-  sheet:       { backgroundColor: '#fff', width: '100%', maxHeight: '85vh', borderRadius: '20px 20px 0 0', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
-  header:      { display: 'flex', alignItems: 'center', gap: '12px', padding: '18px 18px 14px', flexShrink: 0 },
-  headerIcon:  { fontSize: '32px' },
-  headerTitle: { color: '#fff', fontWeight: '700', fontSize: '18px', margin: 0 },
-  headerSub:   { color: 'rgba(255,255,255,0.75)', fontSize: '12px', margin: '3px 0 0 0' },
-  closeBtn:    { marginLeft: 'auto', background: 'none', border: 'none', color: 'rgba(255,255,255,0.8)', fontSize: '22px', cursor: 'pointer' },
-  logPane:     { flex: 1, overflowY: 'auto', padding: '16px 18px' },
-  logHeader:   { fontSize: '10px', fontWeight: '800', color: C.gray, letterSpacing: '1.5px', margin: '0 0 10px 0' },
-  logRow:      { display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '5px 0', borderBottom: '1px solid #f5f5f5' },
-  logPrefix:   { fontSize: '13px', fontWeight: '700', flexShrink: 0, width: '20px', marginTop: '1px' },
-  logText:     { fontSize: '13px', flex: 1, lineHeight: '1.4' },
-  logTime:     { fontSize: '11px', color: C.gray, flexShrink: 0, marginTop: '2px', fontFamily: 'monospace' },
-  doneBtn:     { margin: '12px 18px 24px', backgroundColor: C.green, color: '#fff', border: 'none', padding: '15px', borderRadius: '12px', fontWeight: '700', fontSize: '15px', cursor: 'pointer', flexShrink: 0 },
+  overlay:     { position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'flex-end', zIndex: 2000 },
+  sheet:       { backgroundColor: '#fff', width: '100%', maxHeight: '80vh', borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingBottom: 'env(safe-area-inset-bottom)' },
+  header:      { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', flexShrink: 0 },
+  headerTitle: { color: '#fff', fontWeight: 800, fontSize: 15, margin: 0 },
+  headerSub:   { color: 'rgba(255,255,255,0.75)', fontSize: 11.5, margin: '2px 0 0' },
+  closeBtn:    { background: 'none', border: 'none', color: 'rgba(255,255,255,0.85)', fontSize: 20, cursor: 'pointer' },
+  logPane:     { flex: 1, overflowY: 'auto', padding: '8px 14px 14px' },
+  logRow:      { display: 'flex', gap: 6, padding: '4px 0', borderBottom: '1px solid #f3f3f3', fontSize: 12.5, lineHeight: 1.35 },
+  logTime:     { fontSize: 10.5, color: C.gray, flexShrink: 0, fontFamily: 'monospace', marginTop: 2 },
 };
