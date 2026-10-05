@@ -1,23 +1,21 @@
 /**
- * contact.tsx — QCA Contact & Enquiry
- * Mirrors the web app contact.html exactly:
+ * contact.tsx — QCA Contact & Enquiry ("Join the Squad")
+ * Enquiry form mirrors the web app contact.html:
  *  - Same fields: Name, Email, Phone, Message
  *  - Same validation: name pattern, email, phone pattern, length limits
- *  - Same honeypot: website field hidden
+ *  - Same honeypot: website field always sent empty
  *  - Same XSS check on client + server
- *  - Training hours, map link, address, social handle
- *  - Accessible by all roles (app:contact permission)
+ * Details come from /api/data/contact/info (location, hours, phone, socials).
  */
 
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
 
 const C = {
-  navy: '#0d1b2a', gold: '#c5a059', red: '#dc2626',
-  green: '#1a472a', bg: '#f0f2f5', card: '#fff',
-  border: '#e0e0e0', muted: '#6b7280',
+  green: '#1a472a', gold: '#d4af37', red: '#dc2626', bg: '#f4f7f6',
+  card: '#fff', border: '#e8e8e8', muted: '#6b7280', text: '#1f2937',
 };
+const CARD: React.CSSProperties = { backgroundColor: C.card, borderRadius: 12, border: `1px solid ${C.border}`, overflow: 'hidden' };
 
 function bld(ip: string) {
   const h = (ip || '').trim().replace(/\/+$/, '');
@@ -25,49 +23,33 @@ function bld(ip: string) {
 }
 
 // ── Open social media — native app if installed, browser fallback ─────────────
-// Capacitor WebView: window.open(url, '_system') hands the URL to Android's
-// intent resolver → opens the native app if installed, browser otherwise.
-function openSocialApp(type: 'instagram'|'youtube'|'facebook'|'whatsapp', handle: string) {
-  if (!handle) return;
-  const h     = handle.replace(/^@+/, '').trim();
-  const phone = handle.replace(/[^0-9]/g, '');
-
-  // Build the URL to open
-  let url = '';
-  if (type === 'instagram') url = `https://www.instagram.com/${h}/`;
-  if (type === 'youtube')   url = `https://www.youtube.com/@${h}`;
-  if (type === 'facebook')  url = `https://www.facebook.com/${h}`;
-  if (type === 'whatsapp')  url = `https://wa.me/${phone}`;
-  if (!url) return;
-
-  // Create a hidden anchor and click it — this is the most reliable way
-  // to open external URLs in Capacitor without trapping the user inside the app.
-  // The anchor fires Android's intent chooser → opens YouTube/FB/etc as separate app.
-  // User can press Android back button to return to QCA app normally.
+// Capacitor WebView: an anchor click hands the URL to Android's intent
+// resolver → opens the native app if installed, browser otherwise.
+function openExternal(url: string) {
   const a = document.createElement('a');
-  a.href   = url;
-  a.target = '_blank';
-  a.rel    = 'noopener noreferrer';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
-function hdr() {
+function socialUrl(type: 'instagram'|'youtube'|'facebook'|'whatsapp', handle: string) {
+  const h = handle.replace(/^@+/, '').trim();
+  if (type === 'instagram') return `https://www.instagram.com/${h}/`;
+  if (type === 'youtube')   return `https://www.youtube.com/@${h}`;
+  if (type === 'facebook')  return `https://www.facebook.com/${h}`;
+  return `https://wa.me/${handle.replace(/[^0-9]/g, '')}`;
+}
+
+function hdr(): Record<string, string> {
   const jwt = localStorage.getItem('jwt_token');
   const exp = parseInt(localStorage.getItem('jwt_expiry') || '0');
   if (jwt && exp) {
     if (Date.now() > exp) {
       // Token expired - trigger auto logout
       window.dispatchEvent(new Event('jwt-expired'));
-      return {};
+      return { 'Content-Type': 'application/json' };
     }
     return {'Content-Type':'application/json','Authorization':'Bearer '+jwt,'X-Username':localStorage.getItem('auth_user')||''};
   }
-  return {
-    'Content-Type': 'application/json',
-    'X-Username':   localStorage.getItem('auth_user') ?? '',
-    'X-Password':   localStorage.getItem('auth_pass') ?? '',
-  };
+  return { 'Content-Type': 'application/json', 'X-Username': localStorage.getItem('auth_user') ?? '' };
 }
 // Same patterns as web app
 const NAME_RE  = /^[A-Za-z\s\.\-]+$/;
@@ -75,142 +57,34 @@ const EMAIL_RE = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 const PHONE_RE = /^[\d\+\-\s]+$/;
 const XSS_RE   = /<script|javascript:|on\w+=/i;
 
-// ── Map Link component ────────────────────────────────────────────────────────
-function MapCard({ lat = 8.453111, lng = 76.992833, location = '' }) {
-  const mapsUrl = `https://maps.google.com/maps?q=${lat},${lng}`;
-  return (
-    <div style={{
-      backgroundColor: C.card, borderRadius: 16, overflow: 'hidden',
-      boxShadow: '0 8px 24px rgba(0,0,0,0.10)', marginBottom: 16,
-      border: `1px solid ${C.border}`,
-    }}>
-      {/* Static map preview — opens Google Maps on tap */}
-      <a href={mapsUrl} target="_blank" rel="noreferrer noopener" style={{ display: 'block' }}>
-        <div style={{
-          height: 160, backgroundColor: '#e8f0e8',
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          justifyContent: 'center', position: 'relative',
-          backgroundImage: `url(https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=14&size=600x300&markers=color:red|${lat},${lng}&key=)`,
-          backgroundSize: 'cover', backgroundPosition: 'center',
-        }}>
-          <div style={{
-            backgroundColor: 'rgba(13,27,42,0.75)',
-            borderRadius: 12, padding: '12px 20px', textAlign: 'center',
-          }}>
-            <div style={{ fontSize: 28, marginBottom: 4 }}>📍</div>
-            <div style={{ color: '#fff', fontWeight: 800, fontSize: 13 }}>
-              Tap to Get Directions
-            </div>
-            {location && (
-              <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 }}>
-                {location}
-              </div>
-            )}
-          </div>
-        </div>
-      </a>
-      <div style={{ padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 12, color: C.muted }}>
-          📍 {location || 'Academy Ground'}
-        </div>
-        <a href={mapsUrl} target="_blank" rel="noreferrer"
-          style={{
-            padding: '6px 14px', borderRadius: 20, backgroundColor: C.navy,
-            color: C.gold, fontSize: 11, fontWeight: 800, textDecoration: 'none',
-          }}>
-          GET DIRECTIONS ›
-        </a>
-      </div>
-    </div>
-  );
-}
+const SectionLabel = ({ children }: { children: React.ReactNode }) => (
+  <div style={{ fontSize:10.5, fontWeight:800, color:C.muted, letterSpacing:'0.8px', textTransform:'uppercase' as const, margin:'6px 2px 0' }}>{children}</div>
+);
 
-// ── Info pill ────────────────────────────────────────────────────────────────
-function InfoPill({ icon, title, lines, href, onClick }: {
-  icon: string; title: string; lines: string[]; href?: string; onClick?: () => void;
+/** One tappable row inside a card */
+function Row({ icon, title, sub, onClick, first, chevron = true }: {
+  icon: string; title: React.ReactNode; sub?: React.ReactNode; onClick?: () => void; first?: boolean; chevron?: boolean;
 }) {
-  const inner = (
-    <div style={{
-      backgroundColor: 'rgba(255,255,255,0.95)',
-      borderRadius: 16, padding: '16px 18px', marginBottom: 10,
-      boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
-      display: 'flex', alignItems: 'flex-start', gap: 14,
-    }}>
-      <div style={{
-        width: 44, height: 44, borderRadius: 12, backgroundColor: '#f0f4f1',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 22, flexShrink: 0,
-      }}>{icon}</div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 800, fontSize: 14, color: C.navy, marginBottom: 4 }}>{title}</div>
-        {lines.map((l, i) => (
-          <div key={i} style={{ fontSize: 13, color: C.muted, lineHeight: 1.6 }}>{l}</div>
-        ))}
-      </div>
-      {href && <div style={{ color: C.gold, fontSize: 20, alignSelf: 'center' }}>›</div>}
-    </div>
-  );
-  if (onClick) return <div onClick={onClick} style={{ cursor: 'pointer' }}>{inner}</div>;
-  if (href)    return <a href={href} style={{ textDecoration: 'none' }}>{inner}</a>;
-  return inner;
-}
-
-// ── Ticker bar ───────────────────────────────────────────────────────────────
-function TickerBar({ info }: { info: any }) {
-  const [time, setTime] = useState('');
-  const [date, setDate] = useState('');
-  useEffect(() => {
-    const tick = () => {
-      const now = new Date();
-      setTime(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }));
-      setDate(now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
-    };
-    tick(); const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const items = [
-    { icon: '📅', text: date },
-    { icon: '🕐', text: time },
-    { icon: '📍', text: info?.location || 'Academy Ground' },
-    { icon: '📞', text: info?.phone || '' },
-    { icon: '🕐', text: 'MORNING 6–9 AM · EVENING 4–7 PM' },
-    { icon: '🏆', text: info?.handle || '@quickiescricket' },
-  ].filter(i => i.text);
-
   return (
-    <div style={{
-      backgroundColor: C.navy, borderRadius: 10, height: 38,
-      overflow: 'hidden', display: 'flex', alignItems: 'center',
-      marginBottom: 16, boxShadow: '0 3px 10px rgba(0,0,0,0.1)',
-    }}>
-      <div style={{
-        display: 'flex', gap: 0, whiteSpace: 'nowrap' as const,
-        animation: 'ticker 30s linear infinite',
-        paddingLeft: '100%',
-      }}>
-        {[...items, ...items].map((item, i) => (
-          <span key={i} style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            marginRight: 40, fontSize: 12, fontWeight: 600, color: '#fff',
-          }}>
-            <span style={{ color: C.gold }}>{item.icon}</span>
-            {item.text}
-          </span>
-        ))}
-      </div>
-      <style>{`@keyframes ticker { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }`}</style>
-    </div>
+    <button onClick={onClick} disabled={!onClick}
+      style={{ width:'100%', display:'flex', alignItems:'center', gap:10, padding:'9px 12px', background:'none', border:'none',
+        borderTop: first ? 'none' : `1px solid ${C.border}`, cursor: onClick ? 'pointer' : 'default', textAlign:'left' as const, color:C.text }}>
+      <span style={{ fontSize:17, width:26, textAlign:'center' as const, flexShrink:0 }}>{icon}</span>
+      <span style={{ flex:1, minWidth:0 }}>
+        <span style={{ display:'block', fontSize:13.5, fontWeight:700 }}>{title}</span>
+        {sub && <span style={{ display:'block', fontSize:11.5, color:C.muted, marginTop:1, overflowWrap:'anywhere' }}>{sub}</span>}
+      </span>
+      {onClick && chevron && <span style={{ color:C.muted, fontSize:15 }}>›</span>}
+    </button>
   );
 }
 
 // ── Main Screen ──────────────────────────────────────────────────────────────
 export default function ContactScreen() {
-  const navigate = useNavigate();
-  const base     = bld(localStorage.getItem('server_ip') ?? '');
+  const base = bld(localStorage.getItem('server_ip') ?? '');
 
-  const [info,       setInfo]       = useState<any | null>(null);
-  const [tab,        setTab]        = useState<'info' | 'enquiry'>('info');
+  const [info, setInfo] = useState<any | null>(null);
+  const [tab,  setTab]  = useState<'info' | 'enquiry'>('info');
 
   // Form state — same fields as web app
   const [name,       setName]       = useState('');
@@ -281,265 +155,147 @@ export default function ContactScreen() {
   };
 
   const F: React.CSSProperties = {
-    width: '100%', padding: '12px 16px', borderRadius: 12,
-    border: `2px solid ${C.border}`, fontSize: 14, outline: 'none',
-    fontFamily: 'inherit', boxSizing: 'border-box' as const,
-    backgroundColor: '#fff', transition: 'border-color 0.2s',
+    width: '100%', padding: '9px 11px', borderRadius: 9,
+    border: `1px solid ${C.border}`, fontSize: 14, outline: 'none',
+    fontFamily: 'inherit', boxSizing: 'border-box' as const, backgroundColor: '#fff',
   };
-  const fErr = (key: string): React.CSSProperties =>
-    fieldErrs[key] ? { ...F, borderColor: C.red } : F;
+  const fErr = (key: string): React.CSSProperties => fieldErrs[key] ? { ...F, borderColor: C.red } : F;
+  const L: React.CSSProperties = { display:'block', fontSize:10.5, fontWeight:800, color:C.muted, textTransform:'uppercase' as const, letterSpacing:'0.5px', marginBottom:4 };
+  const FieldErr = ({ k }: { k: string }) => fieldErrs[k] ? <div style={{ fontSize:11, color:C.red, marginTop:3 }}>{fieldErrs[k]}</div> : null;
 
-  const lat = info?.lat || 8.453111;
-  const lng = info?.lng || 76.992833;
+  const lat     = info?.lat || 8.453111;
+  const lng     = info?.lng || 76.992833;
+  const mapsUrl = `https://maps.google.com/maps?q=${lat},${lng}`;
+  const telUrl  = info?.phone ? `tel:${String(info.phone).replace(/\s/g, '')}` : '';
+  const social  = info?.social || {};
+
+  const quick = [
+    telUrl         && { icon:'📞', label:'Call',       go: () => { window.location.href = telUrl; } },
+    info?.whatsapp && { icon:'💬', label:'WhatsApp',   go: () => openExternal(socialUrl('whatsapp', info.whatsapp)) },
+                      { icon:'🧭', label:'Directions', go: () => openExternal(mapsUrl) },
+  ].filter(Boolean) as { icon:string; label:string; go:()=>void }[];
+
+  const follows = [
+    social.instagram && { icon:'📸', title:'Instagram', sub:`@${social.instagram}`, url: socialUrl('instagram', social.instagram) },
+    social.youtube   && { icon:'▶️', title:'YouTube',   sub:social.youtube,         url: socialUrl('youtube',   social.youtube) },
+    social.facebook  && { icon:'📘', title:'Facebook',  sub:social.facebook,        url: socialUrl('facebook',  social.facebook) },
+  ].filter(Boolean) as { icon:string; title:string; sub:string; url:string }[];
 
   return (
-    <div style={{ backgroundColor: C.bg, minHeight: '100vh', paddingBottom: 40 }}>
+    <div style={{ backgroundColor: C.bg, minHeight: '100%', paddingBottom: 24, fontFamily: 'sans-serif', color: C.text }}>
 
-      {/* ── Header ── */}
-      <ScreenHeader background="linear-gradient(135deg, #0d1b2a 60%, #000 100%)"
-        title={<>JOIN THE <span style={{ color: C.gold }}>SQUAD.</span></>}
+      <ScreenHeader
+        title={<>Join the <span style={{ color: C.gold }}>Squad</span></>}
         subtitle="Get in touch — we're only a message away">
-        <HeaderTabs color="#0d1b2a" value={tab} onChange={setTab}
+        <HeaderTabs value={tab} onChange={setTab}
           tabs={[{ id: 'info' as const, label: '📋 Details' }, { id: 'enquiry' as const, label: '✉️ Enquiry' }]} />
       </ScreenHeader>
 
-      <div style={{ padding: '16px 16px 0' }}>
+      <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-        {/* ── TICKER ── */}
-        {info && <TickerBar info={info} />}
+        {/* ══ DETAILS ══ */}
+        {tab === 'info' && (<>
+          {/* Quick actions */}
+          <div style={{ display:'grid', gridTemplateColumns:`repeat(${quick.length},1fr)`, gap:8 }}>
+            {quick.map(q => (
+              <button key={q.label} onClick={q.go} style={{ ...CARD, padding:'10px 4px', cursor:'pointer',
+                display:'flex', flexDirection:'column', alignItems:'center', gap:3 }}>
+                <span style={{ fontSize:20 }}>{q.icon}</span>
+                <span style={{ fontSize:12, fontWeight:800, color:C.green }}>{q.label}</span>
+              </button>
+            ))}
+          </div>
 
-        {/* ══ INFO TAB ══ */}
-        {tab === 'info' && (
-          <>
-            {/* Map */}
-            <MapCard lat={lat} lng={lng} location={info?.location || ''} />
+          <SectionLabel>Academy ground</SectionLabel>
+          <div style={CARD}>
+            <Row first icon="📍" title="Location" sub={info?.location || 'Academy Ground'} onClick={() => openExternal(mapsUrl)} />
+            <Row icon="🕐" title="Training hours" chevron={false}
+              sub={<>Morning {info?.hours_morning || '6:00 AM – 9:00 AM'}<br />Evening {info?.hours_evening || '4:00 PM – 7:00 PM'}</>} />
+          </div>
 
-            {/* Info pills — matching web app */}
-            <InfoPill
-              icon="📍"
-              title="Academy Ground"
-              lines={[info?.location || 'Sports Complex', '']}
-              href={`https://maps.google.com/maps?q=${lat},${lng}`}
-            />
-            <InfoPill
-              icon="📧"
-              title="Email & Phone"
-              lines={[
-                info?.email   || '',
-                info?.phone   || '',
-              ].filter(Boolean)}
-              href={info?.phone ? `tel:${info.phone}` : undefined}
-            />
-            <InfoPill
-              icon="🕐"
-              title="Training Hours"
-              lines={[
-                'Morning: 6:00 AM – 9:00 AM',
-                'Evening: 4:00 PM – 7:00 PM',
-              ]}
-            />
-            {info?.whatsapp && (
-              <InfoPill
-                icon="💬"
-                title="WhatsApp"
-                lines={[info.whatsapp]}
-                onClick={() => openSocialApp('whatsapp', info.whatsapp)}
-              />
-            )}
-
-            {/* Social + quick actions */}
-            <div style={{ display: 'flex', flexDirection: 'column' as const, gap: 10, marginTop: 6 }}>
-              {info?.phone && (
-                <a href={`tel:${info.phone}`} style={{ textDecoration: 'none' }}>
-                  <div style={{ backgroundColor: C.navy, borderRadius: 14, padding: '14px 18px',
-                    display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <span style={{ fontSize: 26 }}>📞</span>
-                    <div>
-                      <div style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>Call Now</div>
-                      <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12 }}>{info.phone}</div>
-                    </div>
-                    <span style={{ marginLeft: 'auto', color: C.gold, fontSize: 22 }}>›</span>
-                  </div>
-                </a>
-              )}
-              {info?.whatsapp && (
-                <button onClick={() => openSocialApp('whatsapp', info.whatsapp)}
-                  style={{ width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left' as const }}>
-                  <div style={{ backgroundColor: '#25d366', borderRadius: 14, padding: '14px 18px',
-                    display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <span style={{ fontSize: 26 }}>💬</span>
-                    <div>
-                      <div style={{ color: '#fff', fontWeight: 800, fontSize: 15 }}>WhatsApp</div>
-                      <div style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>Chat with us</div>
-                    </div>
-                    <span style={{ marginLeft: 'auto', color: '#fff', fontSize: 22 }}>›</span>
-                  </div>
-                </button>
-              )}
+          {(info?.phone || info?.email || info?.whatsapp) && (<>
+            <SectionLabel>Contact</SectionLabel>
+            <div style={CARD}>
+              {info?.phone    && <Row first icon="📞" title={info.phone} sub="Call the academy" onClick={() => { window.location.href = telUrl; }} />}
+              {info?.whatsapp && <Row first={!info?.phone} icon="💬" title="WhatsApp" sub={info.whatsapp}
+                onClick={() => openExternal(socialUrl('whatsapp', info.whatsapp))} />}
+              {info?.email    && <Row first={!info?.phone && !info?.whatsapp} icon="✉️" title={info.email} sub="Send an email"
+                onClick={() => { window.location.href = `mailto:${info.email}`; }} />}
             </div>
+          </>)}
 
-            {/* Social handles */}
-            {(info?.social?.instagram || info?.social?.youtube || info?.social?.facebook) && (
-              <div style={{ marginTop: 14 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: C.muted,
-                  textTransform: 'uppercase' as const, letterSpacing: '1.5px', marginBottom: 8 }}>
-                  Follow Us
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {info.social.instagram && (
-                    <button onClick={() => openSocialApp('instagram', info.social.instagram)}
-                      style={{
-                        flex: 1, padding: '10px 0', borderRadius: 12, border: 'none',
-                        backgroundColor: '#e1306c', color: '#fff',
-                        fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                      }}>📸 Insta</button>
-                  )}
-                  {info.social.youtube && (
-                    <button onClick={() => openSocialApp('youtube', info.social.youtube)}
-                      style={{
-                        flex: 1, padding: '10px 0', borderRadius: 12, border: 'none',
-                        backgroundColor: '#ff0000', color: '#fff',
-                        fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                      }}>▶ YouTube</button>
-                  )}
-                  {info.social.facebook && (
-                    <button onClick={() => openSocialApp('facebook', info.social.facebook)}
-                      style={{
-                        flex: 1, padding: '10px 0', borderRadius: 12, border: 'none',
-                        backgroundColor: '#1877f2', color: '#fff',
-                        fontWeight: 700, fontSize: 12, cursor: 'pointer',
-                      }}>📘 FB</button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            <button onClick={() => setTab('enquiry')} style={{
-              width: '100%', marginTop: 14, padding: '14px', borderRadius: 50,
-              border: 'none', backgroundColor: C.navy, color: C.gold,
-              fontWeight: 800, fontSize: 15, cursor: 'pointer',
-              boxShadow: '0 4px 16px rgba(13,27,42,0.3)',
-            }}>SEND MESSAGE ✉️</button>
-          </>
-        )}
-
-        {/* ══ ENQUIRY TAB ══ */}
-        {tab === 'enquiry' && (
-          <div style={{ backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 20,
-            padding: '20px 16px', boxShadow: '0 5px 20px rgba(0,0,0,0.06)' }}>
-
-            <div style={{ fontSize: 10, fontWeight: 800, color: C.red,
-              textTransform: 'uppercase' as const, letterSpacing: '2px', marginBottom: 6 }}>
-              Quick Enquiry
+          {follows.length > 0 && (<>
+            <SectionLabel>Follow us</SectionLabel>
+            <div style={CARD}>
+              {follows.map((f, i) => <Row key={f.title} first={i===0} icon={f.icon} title={f.title} sub={f.sub} onClick={() => openExternal(f.url)} />)}
             </div>
-            <div style={{ fontWeight: 800, fontSize: 17, color: C.navy, marginBottom: 16 }}>
-              Send us a message
-            </div>
+          </>)}
 
-            {/* ── Status alerts — matching web app ── */}
-            {status === 'sent' && (
-              <div style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 16,
-                backgroundColor: '#dcfce7', border: '1px solid #86efac',
-                display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                <span style={{ fontSize: 20, flexShrink: 0 }}>✅</span>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: '#166534' }}>
-                    Message Sent!
-                  </div>
-                  <div style={{ fontSize: 12, color: '#166534', marginTop: 3 }}>
-                    We'll get back to you shortly. Our team will also reach out via WhatsApp.
-                  </div>
-                </div>
-              </div>
-            )}
-            {status === 'error' && (
-              <div style={{ padding: '14px 16px', borderRadius: 12, marginBottom: 16,
-                backgroundColor: '#fee2e2', border: '1px solid #fca5a5',
-                display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                <span style={{ fontSize: 20, flexShrink: 0 }}>⚠️</span>
-                <div>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: C.red }}>
-                    Something went wrong.
-                  </div>
-                  <div style={{ fontSize: 12, color: C.red, marginTop: 3 }}>
-                    {errMsg || 'Please try again or contact us directly.'}
-                  </div>
-                </div>
-              </div>
-            )}
+          <button onClick={() => setTab('enquiry')} style={{
+            width:'100%', marginTop:4, padding:'11px', borderRadius:11, border:'none',
+            backgroundColor:C.green, color:C.gold, fontWeight:900, fontSize:14, cursor:'pointer',
+          }}>✉️ Send us a message</button>
+        </>)}
 
-            {/* ── Form fields — same as web app ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              {/* Name */}
-              <div>
-                <input value={name} onChange={e => setName(e.target.value)}
-                  placeholder="Your Name"
-                  maxLength={100} autoComplete="name"
-                  style={fErr('name')} />
-                {fieldErrs.name && (
-                  <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{fieldErrs.name}</div>
-                )}
-              </div>
-              {/* Email */}
-              <div>
-                <input value={email} onChange={e => setEmail(e.target.value)}
-                  placeholder="Email Address"
-                  maxLength={150} type="email" inputMode="email" autoComplete="email"
-                  style={fErr('email')} />
-                {fieldErrs.email && (
-                  <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{fieldErrs.email}</div>
-                )}
+        {/* ══ ENQUIRY ══ */}
+        {tab === 'enquiry' && (<>
+          {status === 'sent' && (
+            <div style={{ padding:'9px 12px', borderRadius:10, backgroundColor:'#dcfce7', border:'1px solid #86efac' }}>
+              <div style={{ fontWeight:800, fontSize:13, color:'#166534' }}>✅ Message sent!</div>
+              <div style={{ fontSize:12, color:'#166534', marginTop:2 }}>
+                We'll get back to you shortly. Our team will also reach out via WhatsApp.
               </div>
             </div>
-
-            {/* Phone */}
-            <div style={{ marginBottom: 12 }}>
-              <input value={phone} onChange={e => setPhone(e.target.value)}
-                placeholder="Phone Number (optional)"
-                maxLength={15} type="tel" inputMode="tel" autoComplete="tel"
-                style={fErr('phone')} />
-              {fieldErrs.phone && (
-                <div style={{ fontSize: 11, color: C.red, marginTop: 3 }}>{fieldErrs.phone}</div>
-              )}
+          )}
+          {status === 'error' && (
+            <div style={{ padding:'9px 12px', borderRadius:10, backgroundColor:'#fee2e2', border:'1px solid #fca5a5' }}>
+              <div style={{ fontWeight:800, fontSize:13, color:C.red }}>⚠ Something went wrong.</div>
+              <div style={{ fontSize:12, color:C.red, marginTop:2 }}>{errMsg || 'Please try again or contact us directly.'}</div>
             </div>
+          )}
 
-            {/* Message */}
-            <div style={{ marginBottom: 6 }}>
-              <textarea value={message} onChange={e => setMessage(e.target.value)}
+          <div style={{ ...CARD, padding:12, display:'flex', flexDirection:'column', gap:10 }}>
+            <div>
+              <label style={L} htmlFor="c-name">Your name</label>
+              <input id="c-name" value={name} onChange={e => setName(e.target.value)}
+                maxLength={100} autoComplete="name" style={fErr('name')} />
+              <FieldErr k="name" />
+            </div>
+            <div>
+              <label style={L} htmlFor="c-email">Email</label>
+              <input id="c-email" value={email} onChange={e => setEmail(e.target.value)}
+                maxLength={150} type="email" inputMode="email" autoComplete="email" style={fErr('email')} />
+              <FieldErr k="email" />
+            </div>
+            <div>
+              <label style={L} htmlFor="c-phone">Phone <span style={{ fontWeight:600, textTransform:'none' as const }}>(optional)</span></label>
+              <input id="c-phone" value={phone} onChange={e => setPhone(e.target.value)}
+                maxLength={15} type="tel" inputMode="tel" autoComplete="tel" style={fErr('phone')} />
+              <FieldErr k="phone" />
+            </div>
+            <div>
+              <label style={L} htmlFor="c-msg">Message</label>
+              <textarea id="c-msg" value={message} onChange={e => setMessage(e.target.value)}
                 placeholder="How can we help your cricket journey?"
-                maxLength={1000} rows={5}
-                style={{ ...fErr('message'), resize: 'none' as const }} />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 3 }}>
-                <span style={{ fontSize: 11, color: C.muted }}>{message.length} / 1000</span>
+                maxLength={1000} rows={5} style={{ ...fErr('message'), resize:'none' as const }} />
+              <div style={{ display:'flex', justifyContent:'space-between', marginTop:2 }}>
+                <FieldErr k="message" />
+                <span style={{ fontSize:11, color:C.muted, marginLeft:'auto' }}>{message.length} / 1000</span>
               </div>
-              {fieldErrs.message && (
-                <div style={{ fontSize: 11, color: C.red, marginTop: 2 }}>{fieldErrs.message}</div>
-              )}
             </div>
 
-            {/* Honeypot — hidden from user, same as web app */}
-            <input type="text" tabIndex={-1} autoComplete="off"
-              style={{ display: 'none' }} readOnly />
-
-            {/* Submit */}
             <button onClick={handleSubmit} disabled={submitting} style={{
-              width: '100%', padding: '14px', borderRadius: 50,
-              border: 'none', marginTop: 10,
-              backgroundColor: submitting ? '#9ca3af' : C.navy,
-              color: submitting ? '#fff' : C.gold,
-              fontWeight: 800, fontSize: 15,
-              cursor: submitting ? 'not-allowed' : 'pointer',
-              boxShadow: submitting ? 'none' : '0 4px 16px rgba(13,27,42,0.3)',
+              width:'100%', padding:'11px', borderRadius:11, border:'none',
+              backgroundColor: submitting ? '#9ca3af' : C.green, color: submitting ? '#fff' : C.gold,
+              fontWeight:900, fontSize:14, cursor: submitting ? 'not-allowed' : 'pointer',
             }}>
-              {submitting ? '⏳ SENDING...' : 'SEND MESSAGE ✉️'}
+              {submitting ? '⏳ Sending…' : '✉️ Send message'}
             </button>
-
-            <div style={{ textAlign: 'center' as const, marginTop: 12,
-              fontSize: 11, color: C.muted }}>
+            <div style={{ textAlign:'center' as const, fontSize:11, color:C.muted }}>
               🔒 Your information is secure and will never be shared.
             </div>
           </div>
-        )}
+        </>)}
       </div>
     </div>
   );
