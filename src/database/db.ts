@@ -2560,13 +2560,32 @@ export const upsertPayments = async (rows: any[]): Promise<number> => {
           console.warn('[upsertPayments] skipping payment id=' + r.id + ' — no student_id');
           continue;
         }
+        // Two endpoints feed this table and older servers' /sync/payments
+        // sends fewer columns — never let a missing field blank one we have.
         db.run(
-          `INSERT OR REPLACE INTO payments
+          `INSERT INTO payments
              (id, student_id, student_name, fee_type_id, fee_type_name,
               amount_paid, payment_date, payment_mode, receipt_no,
               billing_month, billing_month_canonical, billing_month_display,
               remarks, status, txn_direction, is_posted, fetched_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             student_id              = excluded.student_id,
+             student_name            = COALESCE(excluded.student_name,            payments.student_name),
+             fee_type_id             = COALESCE(excluded.fee_type_id,             payments.fee_type_id),
+             fee_type_name           = COALESCE(excluded.fee_type_name,           payments.fee_type_name),
+             amount_paid             = excluded.amount_paid,
+             payment_date            = COALESCE(excluded.payment_date,            payments.payment_date),
+             payment_mode            = COALESCE(excluded.payment_mode,            payments.payment_mode),
+             receipt_no              = COALESCE(excluded.receipt_no,              payments.receipt_no),
+             billing_month           = COALESCE(excluded.billing_month,           payments.billing_month),
+             billing_month_canonical = COALESCE(excluded.billing_month_canonical, payments.billing_month_canonical),
+             billing_month_display   = COALESCE(excluded.billing_month_display,   payments.billing_month_display),
+             remarks                 = COALESCE(excluded.remarks,                 payments.remarks),
+             status                  = excluded.status,
+             txn_direction           = excluded.txn_direction,
+             is_posted               = COALESCE(excluded.is_posted,               payments.is_posted, 0),
+             fetched_at              = excluded.fetched_at`,
           [
             r.id, r.student_id, r.student_name ?? null,
             r.fee_type_id ?? null, r.fee_type_name ?? null,
@@ -2577,7 +2596,7 @@ export const upsertPayments = async (rows: any[]): Promise<number> => {
             r.billing_month_display ?? null,
             r.remarks ?? null,
             r.status ?? 'Paid', r.txn_direction ?? 'IN',
-            r.is_posted ?? 0, now,
+            r.is_posted == null ? null : (r.is_posted ? 1 : 0), now,
           ]
         );
         count++;
@@ -2585,8 +2604,26 @@ export const upsertPayments = async (rows: any[]): Promise<number> => {
       db.run('COMMIT');
     } catch (e) { db.run('ROLLBACK'); throw e; }
   }
+  db.run('UPDATE payments SET is_posted = 0 WHERE is_posted IS NULL');
   await _save();
   return count;
+};
+
+/** Drop local payments the server no longer has (voids hard-delete there,
+ *  the payments sync itself is append-only). Returns rows removed. */
+export const pruneDeletedPayments = async (serverIds: number[]): Promise<number> => {
+  const db = await getDb();
+  const keep  = new Set(serverIds);
+  const stale = queryRows(db, 'SELECT id FROM payments')
+    .map(r => r.id as number)
+    .filter(id => !keep.has(id));
+  if (stale.length === 0) return 0;
+  for (let off = 0; off < stale.length; off += 500) {
+    const chunk = stale.slice(off, off + 500);
+    db.run(`DELETE FROM payments WHERE id IN (${chunk.map(() => '?').join(',')})`, chunk);
+  }
+  await _save();
+  return stale.length;
 };
 
 /**
@@ -2745,6 +2782,22 @@ export const getPaymentOverview = async (): Promise<{
  * voided receipts and payment sync is append-only (since_id), so without
  * this the voided payment would keep showing on this device.
  */
+/** Local details for payments (student ids/photo, fee type, month) — keyed by
+ *  payment id. By id, not receipt_no: the server reuses a voided receipt's
+ *  number, so a stale local row can share it. Missing ids = not on this device. */
+export const getPaymentDetailsById = async (ids: number[]): Promise<Record<number, any>> => {
+  if (ids.length === 0) return {};
+  const db = await getDb();
+  const rows = queryRows(db, `
+    SELECT p.id, p.student_id, s.regno, s.qca_id, s.profile_image,
+           p.fee_type_name,
+           COALESCE(p.billing_month_display, p.billing_month) AS month
+    FROM payments p
+    LEFT JOIN students s ON s.id = p.student_id
+    WHERE p.id IN (${ids.map(() => '?').join(',')})`, ids);
+  return Object.fromEntries(rows.map(r => [r.id, r]));
+};
+
 export const deleteLocalPaymentByReceipt = async (receiptNo: string): Promise<void> => {
   const db = await getDb();
   db.run('DELETE FROM payments WHERE receipt_no = ?', [receiptNo]);

@@ -20,6 +20,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import {
   getDb,
   upsertPayments,
+  pruneDeletedPayments,
   getPaymentsMaxId,
   upsertPaymentSummaries,
   getPaymentSummaryCount,
@@ -67,6 +68,24 @@ async function apiFetch(url: string, opts?: RequestInit): Promise<any> {
   return r.json();
 }
 
+/**
+ * Voids hard-delete payments on the server while the payments sync only ever
+ * adds rows — so drop local payments whose id the server no longer has.
+ * Silently skipped on servers without /sync/payments/ids (older builds).
+ */
+export async function reconcilePaymentDeletions(base: string): Promise<number> {
+  try {
+    const j = await apiFetch(`${base}/api/data/sync/payments/ids`);
+    if (!Array.isArray(j?.ids)) return 0;
+    const removed = await pruneDeletedPayments(j.ids);
+    if (removed) console.log(`[SYNC] removed ${removed} payment(s) voided on the server`);
+    return removed;
+  } catch (e: any) {
+    console.warn('[SYNC] payment deletions check skipped:', e?.message ?? e);
+    return 0;
+  }
+}
+
 // ── Sync metadata ─────────────────────────────────────────────────────────────
 const META_KEY = 'qca_sync_meta';
 
@@ -76,6 +95,7 @@ interface SyncMeta {
   last_sync_at:          string;  // last completed full sync
   att_deletions_last_id: number;  // last applied attendance_corrections.id
   summary_last_sync?:    string;  // ISO timestamp — last payment_summary (dues) refresh
+  payments_pruned_at?:   string;  // ISO timestamp — last voided-payment cleanup
 }
 
 function loadMeta(): SyncMeta {
@@ -335,7 +355,15 @@ export async function runBackgroundSync(signal?: AbortSignal): Promise<SyncResul
         }
         hasMore = !!j.has_more && j.data?.length > 0;
       }
+      // Older servers send no fee_type_name — fill from local fee_categories
+      try { await backfillFeeTypeNames(); } catch {}
     } catch(e: any) { result.errors.push(`Payments: ${e.message}`); }
+  }
+  // Voided payments: the max id never goes down, so check deletions on a timer
+  const prunedAt = meta.payments_pruned_at ? Date.parse(meta.payments_pruned_at) : 0;
+  if (!abort() && Date.now() - prunedAt > 6 * 3600_000) {
+    if (await reconcilePaymentDeletions(base)) dirty = true;
+    meta.payments_pruned_at = new Date().toISOString();
   }
   if (abort()) { saveMeta(meta); return result; }
 
@@ -778,6 +806,11 @@ export async function syncPaymentsOnly(): Promise<number> {
     // still missing — incremental sync never revisits already-synced rows,
     // so this resolves it from the fee_categories just refreshed above.
     try { await backfillFeeTypeNames(); } catch (e) { console.warn('[SYNC] fee_type_name backfill:', e); }
+
+    // Drop payments voided on the server since we last looked
+    count += await reconcilePaymentDeletions(base);
+    meta.payments_pruned_at = new Date().toISOString();
+    saveMeta(meta);
 
     // Write-offs since local max + reversals since last sync
     const woMax  = await getWriteOffsMaxId();
