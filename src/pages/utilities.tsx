@@ -1271,12 +1271,18 @@ function AgeGroupsTab({ base }: { base: string }) {
 
 
 // ── Birthdays Tab (local DB) ──────────────────────────────────────────────────
+const ordinal = (n: number) => {
+  const v = n % 100;
+  return n + (['th','st','nd','rd'][(v - 20) % 10] || ['th','st','nd','rd'][v] || 'th');
+};
+
 function BirthdaysTab() {
-  const today   = new Date();
-  const todayMD = `${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const today = new Date();
   const [students, setStudents] = React.useState<any[]>([]);
-  const [selMonth,   setSelMonth]   = React.useState(today.getMonth()+1);
-  const [zoomedPhoto, setZoomedPhoto] = React.useState<any>(null);
+  const [annivs,   setAnnivs]   = React.useState<any[]>([]);
+  const [hasAnniv, setHasAnniv] = React.useState(false);   // older servers don't send anniversaries
+  const [view,     setView]     = React.useState<'bday'|'anniv'>('bday');
+  const [selMonth, setSelMonth] = React.useState(today.getMonth()+1);
   const [loading,  setLoading]  = React.useState(true);
 
   React.useEffect(() => {
@@ -1285,71 +1291,120 @@ function BirthdaysTab() {
       headers:hdr()
     }).then(r=>r.json()).then(j=>{
       if (j.birthdays) setStudents(j.birthdays);
+      setHasAnniv(Array.isArray(j.anniversaries));
+      setAnnivs(Array.isArray(j.anniversaries) ? j.anniversaries : []);
       setLoading(false);
     }).catch(()=>setLoading(false));
   }, [selMonth]);
 
-  // Calculate birthdays
-  // Server already returns day, month, age_next, is_today
-  const withBday = React.useMemo(() => students.map((s:any) => ({
-    ...s,
-    bday_month: s.month  || s.bday_month,
-    bday_day:   s.day    || s.bday_day,
-    days_until: s.is_today ? 0 : 999,
-  })), [students]);
-
-  const todayBdays    = withBday.filter((s:any) => s.is_today);
-  const monthBdays    = withBday.sort((a:any,b:any) => a.bday_day - b.bday_day);
+  // Server already returns day, month, age_next, is_today — sorted by day
+  const monthBdays = React.useMemo(() => [...students].sort((a:any,b:any) => a.day - b.day), [students]);
+  const monthAnniv = React.useMemo(() => [...annivs].sort((a:any,b:any) => a.day - b.day), [annivs]);
+  const todayBdays = monthBdays.filter((s:any) => s.is_today);
+  const todayAnniv = monthAnniv.filter((a:any) => a.is_today);
+  const isAnniv    = view === 'anniv' && hasAnniv;
+  const list       = isAnniv ? monthAnniv : monthBdays;
 
   if (loading) return <div style={{textAlign:'center',padding:40,color:C.muted}}>Loading…</div>;
 
-  const BdayCard = ({s, onPhotoClick}: {s:any, onPhotoClick?:(s:any)=>void}) => (
-    <div style={{display:'flex',alignItems:'center',gap:10,padding:'6px 12px',
-      backgroundColor:s.is_today?'#fefce8':'#fff',
-      boxShadow:s.is_today?'inset 3px 0 0 #f59e0b':'none'}}>
+  const dayBadge = (day: number, hot: boolean) => (
+    <div style={{position:'absolute',bottom:-3,right:-4,minWidth:17,height:17,padding:'0 2px',
+      borderRadius:9,backgroundColor:hot?'#f59e0b':'#6b7280',
+      display:'flex',alignItems:'center',justifyContent:'center',
+      fontSize:9,fontWeight:900,color:'#fff',border:'2px solid #fff'}}>
+      {day}
+    </div>
+  );
+  const rowStyle = (hot: boolean): React.CSSProperties => ({
+    display:'flex',alignItems:'center',gap:10,padding:'6px 12px',
+    backgroundColor:hot?'#fefce8':'#fff',
+    boxShadow:hot?'inset 3px 0 0 #f59e0b':'none',
+  });
+  const nameStyle: React.CSSProperties = {fontWeight:700,fontSize:13.5,color:'#111',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+  const subStyle:  React.CSSProperties = {fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+
+  const BdayCard = ({s}: {s:any}) => (
+    <div style={rowStyle(s.is_today)}>
       <div style={{position:'relative',flexShrink:0}}>
-        <MemberAvatar item={s} size={34} onClick={()=>onPhotoClick?.(s)}/>
-        <div style={{position:'absolute',bottom:-3,right:-4,minWidth:17,height:17,padding:'0 2px',
-          borderRadius:9,backgroundColor:s.is_today?'#f59e0b':'#6b7280',
-          display:'flex',alignItems:'center',justifyContent:'center',
-          fontSize:9,fontWeight:900,color:'#fff',border:'2px solid #fff'}}>
-          {s.bday_day}
-        </div>
+        <MemberAvatar item={s} size={34}/>
+        {dayBadge(s.day, s.is_today)}
       </div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{display:'flex',alignItems:'center',gap:6}}>
-          <span style={{fontWeight:700,fontSize:13.5,color:'#111',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{s.name}</span>
+          <span style={nameStyle}>{s.name}</span>
           {s.is_today && <span style={{fontSize:13}}>🎉</span>}
         </div>
-        <div style={{fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>
-          {studentIds(s) && <span style={{color:'#1a472a',fontWeight:700}}>{studentIds(s)} · </span>}
-          {MN[s.bday_month-1]?.slice(0,3)} {s.bday_day}
+        <div style={subStyle}>
+          {s.type === 'member'
+            ? <span style={{color:C.gold,fontWeight:700}}>Club member · </span>
+            : studentIds(s) && <span style={{color:'#1a472a',fontWeight:700}}>{studentIds(s)} · </span>}
+          {MN[s.month-1]?.slice(0,3)} {s.day}
           {s.is_today ? ` · 🎂 turns ${s.age_next} today` : ` · Age ${s.age_next}`}
-          {s.level ? ` · ${s.level}` : ''}
         </div>
       </div>
     </div>
   );
 
+  const AnnivCard = ({a}: {a:any}) => (
+    <div style={rowStyle(a.is_today)}>
+      <div style={{position:'relative',flexShrink:0}}>
+        <MemberAvatar item={a} size={34}/>
+        {dayBadge(a.day, a.is_today)}
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <span style={nameStyle}>{a.name}{a.spouse_name ? ` & ${a.spouse_name}` : ''}</span>
+          {a.is_today && <span style={{fontSize:13}}>💐</span>}
+        </div>
+        <div style={subStyle}>
+          {MN[a.month-1]?.slice(0,3)} {a.day}
+          {a.years > 0 && (a.is_today ? ` · 💍 ${ordinal(a.years)} anniversary today` : ` · ${ordinal(a.years)} anniversary`)}
+        </div>
+      </div>
+    </div>
+  );
+
+  const todayCount = todayBdays.length + (hasAnniv ? todayAnniv.length : 0);
+  const segBtn = (key: 'bday'|'anniv', label: string, n: number) => (
+    <button onClick={()=>setView(key)} aria-pressed={view===key}
+      style={{flex:1,height:30,borderRadius:7,border:'none',cursor:'pointer',fontWeight:700,fontSize:12,
+        backgroundColor:view===key?C.navy:'transparent',color:view===key?'#fff':C.muted}}>
+      {label} <span style={{opacity:0.75}}>({n})</span>
+    </button>
+  );
+
   return (
     <div style={{padding:'8px 10px'}}>
 
-      {/* Today */}
-      {todayBdays.length > 0 && (
+      {/* Today — birthdays and anniversaries together */}
+      {todayCount > 0 && (
         <div style={{marginBottom:10}}>
           <div style={{fontWeight:800,fontSize:11,color:'#92400e',
             textTransform:'uppercase',letterSpacing:'0.5px',marginBottom:5,
             display:'flex',alignItems:'center',gap:6}}>
-            <span>🎉</span> Today's Birthdays ({todayBdays.length})
+            <span>🎉</span> Today ({todayCount})
           </div>
           <div style={{backgroundColor:'#fef9c3',borderRadius:14,overflow:'hidden',
             border:'2px solid #fde047',boxShadow:'0 2px 8px rgba(234,179,8,0.2)'}}>
-            {todayBdays.map((s,i) => (
-              <div key={s.id} style={{borderBottom:i<todayBdays.length-1?'1px solid #fde047':'none'}}>
-                <BdayCard s={s} onPhotoClick={setZoomedPhoto}/>
+            {todayBdays.map((s:any,i:number) => (
+              <div key={`b${i}`} style={{borderBottom:i<todayCount-1?'1px solid #fde047':'none'}}>
+                <BdayCard s={s}/>
+              </div>
+            ))}
+            {hasAnniv && todayAnniv.map((a:any,i:number) => (
+              <div key={`a${a.id ?? i}`} style={{borderBottom:todayBdays.length+i<todayCount-1?'1px solid #fde047':'none'}}>
+                <AnnivCard a={a}/>
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Birthdays / Anniversaries */}
+      {hasAnniv && (
+        <div style={{display:'flex',gap:4,padding:3,borderRadius:9,backgroundColor:'#e5e7eb',marginBottom:8}}>
+          {segBtn('bday',  '🎂 Birthdays',     monthBdays.length)}
+          {segBtn('anniv', '💍 Anniversaries', monthAnniv.length)}
         </div>
       )}
 
@@ -1369,18 +1424,20 @@ function BirthdaysTab() {
       </div>
 
       <div style={{...LIST_CARD,marginBottom:10}}>
-        {monthBdays.length===0
+        {list.length===0
           ? <div style={{padding:'20px 16px',textAlign:'center',color:C.muted,fontSize:13}}>
-              No birthdays in {MN[selMonth-1]}
+              No {isAnniv ? 'anniversaries' : 'birthdays'} in {MN[selMonth-1]}
             </div>
           : <>
               <div style={{padding:'6px 12px',backgroundColor:C.navy,
                 fontWeight:700,fontSize:12,color:'#fff'}}>
-                {MN[selMonth-1]} — {monthBdays.length} birthday{monthBdays.length===1?'':'s'}
+                {MN[selMonth-1]} — {list.length} {isAnniv
+                  ? `anniversar${list.length===1?'y':'ies'}`
+                  : `birthday${list.length===1?'':'s'}`}
               </div>
-              {monthBdays.map((s,i) => (
-                <div key={s.id} style={{borderBottom:i<monthBdays.length-1?`1px solid ${C.border}`:'none'}}>
-                  <BdayCard s={s} onPhotoClick={setZoomedPhoto}/>
+              {list.map((x:any,i:number) => (
+                <div key={isAnniv ? `a${x.id ?? i}` : `b${i}`} style={{borderBottom:i<list.length-1?`1px solid ${C.border}`:'none'}}>
+                  {isAnniv ? <AnnivCard a={x}/> : <BdayCard s={x}/>}
                 </div>
               ))}
             </>
@@ -1388,7 +1445,8 @@ function BirthdaysTab() {
       </div>
 
       <div style={{textAlign:'center',fontSize:11,color:C.muted}}>
-        {monthBdays.length} birthday{monthBdays.length===1?'':'s'} in {MN[selMonth-1]} · {todayBdays.length} today
+        {monthBdays.length} birthday{monthBdays.length===1?'':'s'}
+        {hasAnniv && ` · ${monthAnniv.length} anniversar${monthAnniv.length===1?'y':'ies'}`} in {MN[selMonth-1]} · {todayCount} today
       </div>
     </div>
   );
