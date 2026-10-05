@@ -41,63 +41,45 @@ export default function BiometricSection() {
     setMsg(newVal ? '✅ Biometric login enabled' : 'Biometric login disabled');
   };
 
-  if (!status) return <div style={{color:C.muted,fontSize:13}}>Checking...</div>;
+  const available = !!status?.isAvailable;
+  const sub = !status ? 'Checking this phone…'
+    : !available ? (status.reason || 'Not available on this phone')
+    : status.deviceIsSecure === false ? 'Set a phone screen lock first'
+    : enabled ? '● On — asked when the app opens' : 'Unlock the app with your fingerprint';
 
+  // Rendered as a row inside the Settings "Security" card
   return (
-    <div>
-      <div style={{fontSize:13,marginBottom:12}}>
-        <span style={{
-          padding:'3px 10px', borderRadius:10, fontWeight:700, fontSize:12,
-          backgroundColor: status.isAvailable ? '#e8f5e9' : '#fef2f2',
-          color: status.isAvailable ? C.green : C.red,
-        }}>
-          {status.isAvailable ? '✅ Available' : '❌ Not Available'}
-        </span>
-        {status.biometryType !== undefined && (
-          <span style={{marginLeft:8,fontSize:12,color:C.muted}}>
-            Type: {status.biometryType}
-          </span>
-        )}
-      </div>
-
-      {status.reason && !status.isAvailable && (
-        <div style={{fontSize:12,color:C.red,marginBottom:12}}>{status.reason}</div>
-      )}
-
-      {status.deviceIsSecure !== undefined && (
-        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
-          Device secure: {status.deviceIsSecure ? 'Yes' : 'No'}
+    <div style={{ padding:'9px 12px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <span style={{ fontSize:18, width:26, textAlign:'center', flexShrink:0 }}>👆</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontWeight:800, fontSize:13.5, color:'#1f2937' }}>Fingerprint unlock</div>
+          <div style={{ fontSize:11.5, color: !status ? C.muted : !available ? C.red : enabled ? '#166534' : C.muted,
+            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
         </div>
-      )}
-
+        {available && (
+          <button onClick={testBiometric} disabled={testing}
+            style={{ flexShrink:0, padding:'6px 11px', borderRadius:8, border:`1px solid ${C.green}`,
+              backgroundColor:'#fff', color:C.green, fontWeight:700, fontSize:12, cursor:'pointer' }}>
+            {testing ? '…' : 'Test'}
+          </button>
+        )}
+        <button onClick={toggleBiometric} disabled={!available} role="switch" aria-checked={enabled && available}
+          aria-label="Fingerprint unlock"
+          style={{ position:'relative', width:44, height:24, borderRadius:12, border:'none', flexShrink:0,
+            cursor: available ? 'pointer' : 'not-allowed',
+            backgroundColor: enabled && available ? C.green : '#d1d5db', transition:'background-color 0.2s' }}>
+          <span style={{ position:'absolute', top:3, left: enabled && available ? 23 : 3, width:18, height:18,
+            borderRadius:'50%', backgroundColor:'#fff', transition:'left 0.2s', boxShadow:'0 1px 3px rgba(0,0,0,0.2)' }}/>
+        </button>
+      </div>
       {msg && (
-        <div style={{fontSize:13,padding:'8px 12px',borderRadius:8,marginBottom:12,
+        <div style={{ marginTop:7, marginLeft:36, fontSize:12, padding:'6px 10px', borderRadius:8, fontWeight:600,
           backgroundColor: msg.startsWith('✅') ? '#e8f5e9' : '#fef2f2',
-          color: msg.startsWith('✅') ? C.green : C.red}}>
+          color: msg.startsWith('✅') ? C.green : C.red }}>
           {msg}
         </div>
       )}
-
-      <div style={{display:'flex',gap:8}}>
-        <button onClick={testBiometric} disabled={testing || !status.isAvailable}
-          style={{flex:1,padding:'10px 0',borderRadius:10,border:'none',cursor:'pointer',
-            fontWeight:700,fontSize:13,
-            backgroundColor: status.isAvailable ? C.green : '#e5e7eb',
-            color: status.isAvailable ? '#fff' : C.muted}}>
-          {testing ? 'Testing…' : '🔐 Test Biometric'}
-        </button>
-
-        {status.isAvailable && (
-          <button onClick={toggleBiometric}
-            style={{flex:1,padding:'10px 0',borderRadius:10,
-              border:`1px solid ${enabled ? C.red : C.green}`,cursor:'pointer',
-              fontWeight:700,fontSize:13,
-              backgroundColor:'#fff',
-              color: enabled ? C.red : C.green}}>
-            {enabled ? '🔴 Disable' : '🟢 Enable'}
-          </button>
-        )}
-      </div>
     </div>
   );
 }

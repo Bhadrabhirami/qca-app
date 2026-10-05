@@ -174,66 +174,37 @@ export function PinSettings() {
     flash('PIN removed. App lock disabled.');
   };
 
+  const small = (color: string, filled = false): React.CSSProperties => ({
+    flexShrink:0, padding:'6px 11px', borderRadius:8, cursor:'pointer', fontWeight:700, fontSize:12,
+    border:`1px solid ${color}`, backgroundColor: filled ? color : '#fff', color: filled ? '#fff' : color,
+  });
+  // Rendered as a row inside the Settings "Security" card
   return (
-    <div style={{
-      backgroundColor:'#fff', borderRadius:14, padding:16,
-      marginBottom:14, boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
-    }}>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
-        <span style={{ fontSize:20 }}>🔒</span>
-        <div>
-          <div style={{ fontWeight:800, fontSize:15, color:'#222' }}>App Lock (PIN)</div>
-          <div style={{ fontSize:12, color:'#888' }}>4-digit PIN required to open app</div>
+    <div style={{ padding:'9px 12px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <span style={{ fontSize:18, width:26, textAlign:'center', flexShrink:0 }}>🔢</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontWeight:800, fontSize:13.5, color:'#1f2937' }}>App PIN</div>
+          <div style={{ fontSize:11.5, color: pinSet ? '#166534' : '#6b7280' }}>
+            {pinSet ? '● On — asked when the app opens' : '4-digit PIN to open the app'}
+          </div>
         </div>
-        <div style={{
-          marginLeft:'auto', fontSize:11, fontWeight:700,
-          padding:'3px 10px', borderRadius:10,
-          backgroundColor: pinSet ? '#e8f5e9' : '#f5f5f5',
-          color: pinSet ? '#27ae60' : '#aaa',
-        }}>
-          {pinSet ? '● Active' : '○ Off'}
-        </div>
+        {view === 'idle' && (!pinSet
+          ? <button onClick={() => setView('setting')} style={small(C.green, true)}>Set</button>
+          : <>
+              <button onClick={() => setView('setting')} style={small(C.green)}>Change</button>
+              <button onClick={removePin} style={small(C.red)}>Remove</button>
+            </>)}
       </div>
 
       {msg && (
-        <div style={{
-          padding:'8px 12px', borderRadius:8, marginBottom:10,
-          fontSize:12, fontWeight:600,
+        <div style={{ marginTop:7, marginLeft:36, padding:'6px 10px', borderRadius:8, fontSize:12, fontWeight:600,
           backgroundColor: msg.includes('removed') ? '#fdecea' : '#e8f5e9',
-          color: msg.includes('removed') ? C.red : '#27ae60',
-        }}>{msg}</div>
-      )}
-
-      {view === 'idle' && (
-        <div style={{ display:'flex', gap:8, marginTop:10 }}>
-          {!pinSet ? (
-            <button onClick={() => setView('setting')} style={{
-              flex:1, padding:'11px 0', borderRadius:10, border:'none',
-              backgroundColor:C.green, color:'#fff', fontWeight:700,
-              fontSize:13, cursor:'pointer',
-            }}>Set PIN</button>
-          ) : (
-            <>
-              <button onClick={() => setView('setting')} style={{
-                flex:1, padding:'11px 0', borderRadius:10,
-                border:`1px solid ${C.green}`, backgroundColor:'#fff',
-                color:C.green, fontWeight:700, fontSize:13, cursor:'pointer',
-              }}>Change PIN</button>
-              <button onClick={removePin} style={{
-                flex:1, padding:'11px 0', borderRadius:10,
-                border:`1px solid ${C.red}`, backgroundColor:'#fff',
-                color:C.red, fontWeight:700, fontSize:13, cursor:'pointer',
-              }}>Remove PIN</button>
-            </>
-          )}
-        </div>
+          color: msg.includes('removed') ? C.red : '#166534' }}>{msg}</div>
       )}
 
       {view === 'setting' && (
-        <div style={{
-          backgroundColor:'#0a1a0f', borderRadius:12,
-          padding:'20px 16px', marginTop:10,
-        }}>
+        <div style={{ backgroundColor:'#001f3f', borderRadius:12, padding:'18px 14px', marginTop:8 }}>
           <PinPad
             mode="set"
             onSuccess={pin => {
