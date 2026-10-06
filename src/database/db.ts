@@ -3024,7 +3024,7 @@ async function nextLocalId(): Promise<number> {
 // ── Create new local match ────────────────────────────────────────────────────
 export const createLocalMatch = async (data: {
   opponent_name: string; match_date: string; match_type: string;
-  venue: string; toss_winner: string; toss_decision: string;
+  venue: string; toss_winner: string; toss_decision: string; total_overs?: number;
 }): Promise<string> => {
   await ensureMatchTables();
   const db = await getDb();
@@ -3032,10 +3032,10 @@ export const createLocalMatch = async (data: {
   db.run(
     `INSERT INTO local_matches
      (local_id, opponent_name, match_date, match_type, venue,
-      toss_winner, toss_decision, match_status, synced, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,'Scheduled',0,?,?)`,
+      toss_winner, toss_decision, total_overs, match_status, synced, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,'Scheduled',0,?,?)`,
     [String(id), data.opponent_name, data.match_date, data.match_type,
-     data.venue, data.toss_winner, data.toss_decision, now(), now()]
+     data.venue, data.toss_winner, data.toss_decision, data.total_overs ?? null, now(), now()]
   );
   await _save();
   return String(id);
@@ -3465,6 +3465,10 @@ export const deleteLocalMatch = async (matchId: string): Promise<void> => {
   db.run(`DELETE FROM local_stats   WHERE match_id=?`, [matchId]);
   db.run(`DELETE FROM local_lineup  WHERE match_id=?`, [matchId]);
   db.run(`DELETE FROM local_innings WHERE match_id=?`, [matchId]);
+  // Opposition scorecard + fall of wickets (tables may not exist on very old installs)
+  for (const t of ['local_opp_batting', 'local_opp_bowling', 'local_opp_players', 'local_fow']) {
+    try { db.run(`DELETE FROM ${t} WHERE match_id=?`, [matchId]); } catch { /* table not created yet */ }
+  }
   db.run(`DELETE FROM local_matches WHERE local_id=?`, [matchId]);
   await _save();
 };
