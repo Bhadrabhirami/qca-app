@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { jwtLogin, checkPasswordStrength } from './jwtAuth';
 import { BiometricAuth, BiometryError } from '@aparajita/capacitor-biometric-auth';
 import { saveUserContext } from './usePermissions';
+import { getLastUsername, setLastUsername, canRememberPassword, savePassword, loadSavedLogin, hasSavedLogin, forgetPassword } from './savedLogin';
 
 const C = {
   navy:'#0d1b2a', navyL:'#1a2f4a', green:'#1a472a',
@@ -74,7 +75,7 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
   const [showSetup, setShowSetup] = useState(() => !localStorage.getItem('server_ip'));
 
   // Auth
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(getLastUsername);   // remembered across session expiry
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading,  setLoading]  = useState(false);
@@ -85,6 +86,10 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
   const [bioError, setBioError] = useState('');
   const [error,    setError]    = useState('');
   const [locked,   setLocked]   = useState(false);
+  // Saved password (Keystore, native only) -> "Sign in with fingerprint"
+  const [savedAvail, setSavedAvail] = useState(false);
+  const [remember,   setRemember]   = useState(true);
+  useEffect(() => { hasSavedLogin().then(setSavedAvail); }, []);
 
   // Is fingerprint/face available? Drives the "enable biometric?" offer
   // after a password login (the unlock itself is App.jsx's lock screen).
@@ -157,14 +162,10 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
     setLoading(false);
   };
 
-  const handleLogin = async () => {
-    if (!username.trim()) return err('Username is required');
-    if (!password)        return err('Password is required');
-    if (!localStorage.getItem('server_ip')) return err('Configure server first');
-    setLoading(true); setError('');
-    const res = await jwtLogin(username.trim(), password);
-    if (res.success && res.token && res.user) {
+  /** After the server accepted a login — shared by password and fingerprint sign-in */
+  const finishLogin = (res: any) => {
       localStorage.setItem('auth_user', res.user.username);
+      setLastUsername(res.user.username);
       // Never persist the password — every request authenticates with the JWT
       localStorage.removeItem('auth_pass');
       // Set secret_key if not already set (needed for legacy API calls)
@@ -177,14 +178,59 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
         authenticated_as: res.user.username,
       });
       // Offer biometric setup after first password login
-      console.log("[BIO] available:", biometricAvailable, "enabled:", biometricEnabled); if (biometricAvailable && !biometricEnabled) {
+      if (biometricAvailable && !biometricEnabled) {
         localStorage.setItem('biometric_pending_setup', 'true');
       }
       onSuccess(res.user, res.token);
+  };
+
+  const handleLogin = async () => {
+    if (!username.trim()) return err('Username is required');
+    if (!password)        return err('Password is required');
+    if (!localStorage.getItem('server_ip')) return err('Configure server first');
+    setLoading(true); setError('');
+    const res = await jwtLogin(username.trim(), password);
+    if (res.success && res.token && res.user) {
+      // Remember for fingerprint sign-in (encrypted, this phone only), or forget if unticked
+      if (remember && biometricAvailable && canRememberPassword()) await savePassword(res.user.username, password);
+      else await forgetPassword();
+      finishLogin(res);
     } else {
       if (res.locked) { setLocked(true); }
       err(res.error || 'Login failed');
     }
+  };
+
+  /** Fingerprint -> read the saved password -> sign in. One attempt; a rejected password is forgotten. */
+  const fingerprintLogin = async () => {
+    if (!localStorage.getItem('server_ip')) return err('Configure server first');
+    setError('');
+    try {
+      await BiometricAuth.authenticate({
+        reason: 'Sign in to QCA',
+        cancelTitle: 'Cancel',
+        allowDeviceCredential: true,
+        androidTitle: 'QCA Academy',
+        androidSubtitle: 'Sign in with your fingerprint',
+        androidConfirmationRequired: false,
+      });
+    } catch (e: any) {
+      const code = e?.code || '';
+      if (code !== 'userCancel' && code !== 'systemCancel') setError('Fingerprint not recognised. Try again or type your password.');
+      return;
+    }
+    setLoading(true);
+    const saved = await loadSavedLogin();
+    if (!saved) { setSavedAvail(false); return err('No saved password on this phone. Please type it once.'); }
+    const res = await jwtLogin(saved.u, saved.p);
+    if (res.success && res.token && res.user) { finishLogin(res); return; }
+    if (res.error === 'Cannot reach server') return err('Cannot reach server. Check Wi-Fi and try again.');
+    // Password changed or account locked: never retry a rejected password
+    await forgetPassword();
+    setSavedAvail(false);
+    setUsername(saved.u);
+    if (res.locked) setLocked(true);
+    err(res.locked ? (res.error || 'Account locked') : 'Your saved password no longer works. Please type your current password.');
   };
 
   const [maskedEmail, setMaskedEmail] = useState('');
@@ -340,13 +386,31 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
         {/* ── LOGIN ── */}
         {screen==='login' && !showSetup && (
           <>
-            <div style={{fontWeight:900,fontSize:19,color:C.navy,marginBottom:2}}>Welcome Back</div>
-            <div style={{fontSize:12,color:C.muted,marginBottom:18}}>Sign in to continue</div>
+            <div style={{fontWeight:900,fontSize:19,color:C.navy,marginBottom:2}}>
+              Welcome Back{username ? `, ${username}` : ''}
+            </div>
+            <div style={{fontSize:12,color:C.muted,marginBottom:savedAvail ? 12 : 18}}>
+              {savedAvail ? 'Your session ended. Sign in again to continue.' : 'Sign in to continue'}
+            </div>
+
+            {savedAvail && biometricAvailable && (
+              <>
+                <button onClick={fingerprintLogin} disabled={loading||locked}
+                  style={{width:'100%',padding:13,borderRadius:12,border:'none',marginBottom:8,
+                    background:loading||locked?'#e5e7eb':`linear-gradient(135deg,${C.green},#2d6a4f)`,
+                    color:loading||locked?C.muted:C.gold,fontWeight:900,fontSize:15,cursor:loading||locked?'not-allowed':'pointer'}}>
+                  {loading ? 'Signing in…' : '👆 Sign in with fingerprint'}
+                </button>
+                <div style={{display:'flex',alignItems:'center',gap:8,margin:'10px 0 12px',color:C.muted,fontSize:11}}>
+                  <div style={{flex:1,height:1,backgroundColor:'#e5e7eb'}}/>or type your password<div style={{flex:1,height:1,backgroundColor:'#e5e7eb'}}/>
+                </div>
+              </>
+            )}
 
             <div style={{marginBottom:12}}>
               <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:4,textTransform:'uppercase' as const}}>Username</div>
               <input value={username} onChange={e=>setUsername(e.target.value)}
-                placeholder="Enter username" autoFocus
+                placeholder="Enter username" autoFocus={!username} autoCapitalize="none" autoComplete="username"
                 style={inputStyle()}/>
             </div>
 
@@ -356,7 +420,7 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
                 <input type={showPass?'text':'password'} value={password}
                   onChange={e=>setPassword(e.target.value)}
                   onKeyDown={e=>e.key==='Enter'&&handleLogin()}
-                  placeholder="Enter password"
+                  placeholder="Enter password" autoFocus={!!username && !savedAvail} autoComplete="current-password"
                   style={inputStyle({paddingRight:44})}/>
                 <button onClick={()=>setShowPass(v=>!v)}
                   style={{position:'absolute' as const,right:12,top:'50%',
@@ -366,6 +430,14 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
                 </button>
               </div>
             </div>
+
+            {biometricAvailable && canRememberPassword() && (
+              <label style={{display:'flex',alignItems:'center',gap:8,marginBottom:12,fontSize:12,color:C.muted,cursor:'pointer'}}>
+                <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}
+                  style={{width:16,height:16,accentColor:C.green}}/>
+                Remember on this phone for fingerprint sign-in
+              </label>
+            )}
 
             {error && (
               <div style={{backgroundColor:locked?'#fef9c3':'#fef2f2',borderRadius:10,

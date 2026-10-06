@@ -12,6 +12,8 @@ import PulseScreen      from './pages/pulse';
 import RemindersScreen   from './pages/reminders';
 import { saveUserContext, PermRoute, isDataRestricted, getLinkedStudentIds } from './pages/usePermissions';
 import { BiometricAuth } from '@aparajita/capacitor-biometric-auth';
+import { jwtLogin } from './pages/jwtAuth';
+import { loadSavedLogin, forgetPassword } from './pages/savedLogin';
 import AppLock   from './pages/AppLock';
 import LoginPage from './pages/Login';
 import BottomNav from './shared/BottomNav';
@@ -497,8 +499,24 @@ export default function App() {
 
   // Biometric verified → leave the lock screen. The session flag tells
   // AppLock to skip its PIN pad right after a biometric unlock.
-  const onBioUnlock = () => {
+  const onBioUnlock = async () => {
     sessionStorage.setItem('qca_bio_unlocked', String(Date.now()));
+    // Fingerprint passed. If the 8-hour session has ended, renew it with the
+    // password saved in the Keystore — otherwise unlocking would land on an
+    // expired session and the next request would lock the app again.
+    const expiry = parseInt(localStorage.getItem('jwt_expiry') || '0');
+    if (Date.now() >= expiry - 60000) {
+      const saved = await loadSavedLogin();
+      const res = saved ? await jwtLogin(saved.u, saved.p) : null;
+      if (res?.success && res.token && res.user) {
+        handleJwtSuccess(res.user, res.token);
+      } else {
+        if (res && res.error !== 'Cannot reach server') await forgetPassword();   // password changed
+        setBioLocked(false);
+        setJwtUser(null);          // → login screen, username pre-filled
+        return;
+      }
+    }
     setBioLocked(false);
   };
 

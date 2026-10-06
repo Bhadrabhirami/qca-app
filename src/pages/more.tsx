@@ -4,6 +4,7 @@ import { usePermissions } from './usePermissions';
 import ScreenHeader from '../shared/ScreenHeader';
 import TileGrid from '../shared/TileGrid';
 import EmptyAreaLogo from '../shared/EmptyAreaLogo';
+import { forgetPassword } from './savedLogin';
 import {
   IconHistory, IconChartBar, IconChartPie, IconEdit,
   IconTrophy, IconBook, IconBrandYoutube, IconNews, IconPhoto, IconCamera,
@@ -65,8 +66,10 @@ const GROUPS: Group[] = [
 export default function MoreScreen() {
   const navigate = useNavigate();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (!window.confirm('Sign out of QCA?')) return;
+    // Signing out on purpose also forgets the fingerprint sign-in password (the username stays pre-filled)
+    await forgetPassword();
     // Clear all auth data
     const keys = [
       'jwt_token','jwt_expiry','jwt_user_cache',
