@@ -110,7 +110,7 @@ function useZoom(src: string, onSingleTap?: () => void) {
     style: { position: 'relative', width: '100%', height: '100%', display: 'flex', alignItems: 'center',
       justifyContent: 'center', overflow: 'hidden', touchAction: 'none', userSelect: 'none' } as React.CSSProperties,
   };
-  return { view, transform, boxProps, reset };
+  return { view, transform, boxProps, reset, boxRef, animate };
 }
 
 const hintStyle: React.CSSProperties = {
@@ -141,16 +141,34 @@ export function ZoomableVideo({ src, poster, style, autoPlay = true }: {
   };
   // Single tap plays/pauses only while zoomed (at 1× the native controls handle taps)
   const zoomedRef = useRef(false);
-  const { view, transform, boxProps, reset } = useZoom(src, () => { if (zoomedRef.current) togglePlay(); });
+  const { view, boxProps, reset, boxRef, animate } = useZoom(src, () => { if (zoomedRef.current) togglePlay(); });
   const zoomed = view.scale > 1;
   zoomedRef.current = zoomed;
+
+  // Android WebView draws <video> on its own hardware layer; a CSS transform on it
+  // can leave that layer black. So zoom by real size + position instead.
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    const measure = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', measure);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [boxRef]);
+  const w = box.w * view.scale, h = box.h * view.scale;
+  const layout: React.CSSProperties = box.w
+    ? { position: 'absolute', width: w, height: h, left: (box.w - w) / 2 + view.x, top: (box.h - h) / 2 + view.y,
+        transition: animate ? 'width 0.2s ease, height 0.2s ease, left 0.2s ease, top 0.2s ease' : 'none' }
+    : { width: '100%', maxHeight: '100%' };
 
   return (
     <div {...boxProps}>
       <video ref={videoRef} key={src} src={src} poster={poster} playsInline autoPlay={autoPlay}
         controls={!zoomed}
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-        style={{ width: '100%', maxHeight: '100%', backgroundColor: '#000', ...style, ...transform }} />
+        style={{ backgroundColor: '#000', objectFit: 'contain', ...style, ...layout }} />
       {zoomed ? (
         <div onPointerDown={e => e.stopPropagation()} onPointerUp={e => e.stopPropagation()}
           style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 8 }}>
