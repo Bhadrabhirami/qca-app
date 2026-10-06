@@ -360,6 +360,42 @@ function AttendanceTab({base}:{base:string}){
 // ══════════════════════════════════════════════════════════════════════════════
 // TAB 3 — PAYMENTS
 // ══════════════════════════════════════════════════════════════════════════════
+// One payment / transaction row — students with photo + ids; expenses and other
+// income (no student) with the account holder and an EXPENSE / OTHER INCOME label
+function PaymentRow({ r, first }: { r:any; first:boolean }) {
+  const out     = (r.txn_type||'INCOME')==='EXPENSE';
+  const student = !!r.student_name;
+  const title   = r.student_name || r.account_name || r.fee_type || 'Unknown entry';
+  const cat     = student || r.account_name ? (r.fee_type||'Standard Fee') : '';
+  const ids     = student ? studentIds(r) : '';
+  const d       = new Date(String(r.payment_date||'').slice(0,10)+'T00:00:00');
+  const when    = isNaN(d.getTime()) ? (r.payment_date||'') : d.toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+  const one: React.CSSProperties = {fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'};
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:10,padding:'7px 12px',borderTop:first?'none':`1px solid ${C.border}`}}>
+      {student
+        ? <MemberAvatar item={{name:r.student_name,profile_image:r.profile_image||null}} size={36}/>
+        : <div aria-hidden style={{width:36,height:36,borderRadius:8,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+            fontSize:17,backgroundColor:out?'#fee2e2':'#e8f5e9'}}>{out?'💸':'💰'}</div>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <span style={{fontWeight:700,fontSize:14,color:'#111',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{title}</span>
+          {!student && (
+            <span style={{flexShrink:0,fontSize:9.5,fontWeight:800,padding:'1px 6px',borderRadius:6,
+              backgroundColor:out?'#fee2e2':'#e8f5e9',color:out?'#dc2626':'#166534'}}>{out?'EXPENSE':'OTHER INCOME'}</span>
+          )}
+        </div>
+        <div style={one}>{ids && <span style={{color:'#1a472a',fontWeight:700}}>{ids} · </span>}🧾 {r.receipt_no||'—'} · {r.payment_mode||'—'}</div>
+        <div style={one}>{[cat, r.billing_month].filter(Boolean).join(' · ') || '—'}</div>
+      </div>
+      <div style={{textAlign:'right',flexShrink:0}}>
+        <div style={{fontWeight:900,fontSize:14,color:out?'#dc2626':C.green}}>{out?'− ':'+ '}{fmtAmt(r.amount_paid)}</div>
+        <div style={{fontSize:10,color:C.muted,marginTop:2}}>{when}</div>
+      </div>
+    </div>
+  );
+}
+
 function PaymentsTab({base}:{base:string}){
   const [rows,    setRows]    = useState<any[]>([]);
   const [total,   setTotal]   = useState(0);
@@ -435,28 +471,7 @@ function PaymentsTab({base}:{base:string}){
       <div style={{padding:'8px 10px 0'}}>
         {rows.length>0&&(
         <div style={LIST_CARD}>
-        {rows.map((r,i)=>(
-          <div key={r.id} style={{display:'flex',alignItems:'center',gap:10,
-            padding:'7px 12px',borderTop:i?`1px solid ${C.border}`:'none'}}>
-            <MemberAvatar item={{name:r.student_name||'?',profile_image:r.profile_image||null}} size={36}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:700,fontSize:14,color:'#111',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{r.student_name||'—'}</div>
-              <div style={{fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>
-                <span style={{color:'#1a472a',fontWeight:700}}>{studentIds(r)||'—'}</span> · 🧾 {r.receipt_no||'—'} · {r.payment_mode||'—'}
-              </div>
-              <div style={{fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>
-                {r.fee_type||'Standard Fee'} · {r.billing_month||'—'}
-              </div>
-            </div>
-            <div style={{textAlign:'right' as const,flexShrink:0}}>
-              <div style={{fontWeight:900,fontSize:14,
-                color:(r.txn_type||'INCOME')==='EXPENSE'?'#dc2626':C.green}}>
-                {(r.txn_type||'INCOME')==='EXPENSE'?'− ':'+ '}{fmtAmt(r.amount_paid)}
-              </div>
-              <div style={{fontSize:10,color:C.muted,marginTop:2}}>{r.payment_date}</div>
-            </div>
-          </div>
-        ))}
+        {rows.map((r,i)=><PaymentRow key={r.id??i} r={r} first={i===0}/>)}
         </div>
         )}
         {fetched&&rows.length===0&&(
@@ -624,24 +639,11 @@ function MonthlyReportTab({base}:{base:string}){
             <div style={{padding:'8px 10px 0'}}>
               {(data.payments||[]).length>0&&(
               <div style={LIST_CARD}>
-              {([...(data.payments||[])].sort((a,b)=>(Number(a.qca_id)||9999)-(Number(b.qca_id)||9999))).map((p:any,i:number)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:10,
-                  padding:'7px 12px',borderTop:i?`1px solid ${C.border}`:'none'}}>
-                  <MemberAvatar item={{name:p.student_name||p.name||'?',profile_image:p.profile_image||null}} size={34}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13.5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{p.student_name||'—'}</div>
-                    <div style={{fontSize:11,color:C.muted,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>
-                      <span style={{color:'#1a472a',fontWeight:700}}>{studentIds(p)||'—'}</span> · 🧾 {p.receipt_no||'—'} · {p.payment_mode||'—'}
-                    </div>
-                    <div style={{fontSize:11,color:C.muted,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const}}>{p.fee_type||'—'} · {p.billing_month||'—'}</div>
-                  </div>
-                  <div style={{textAlign:'right' as const,flexShrink:0}}>
-                    <div style={{fontWeight:900,fontSize:14,color:(p.txn_type||'INCOME')==='EXPENSE'?'#dc2626':C.green}}>
-                      {(p.txn_type||'INCOME')==='EXPENSE'?'− ':'+'}{fmtAmt(p.amount_paid)}
-                    </div>
-                    <div style={{fontSize:10,color:C.muted,marginTop:2}}>{p.payment_date}</div>
-                  </div>
-                </div>
+              {([...(data.payments||[])].sort((a,b)=>
+                  // students by QCA ID first, then non-student entries by date
+                  (a.student_name?0:1)-(b.student_name?0:1) || (Number(a.qca_id)||9999)-(Number(b.qca_id)||9999)
+                  || String(a.payment_date).localeCompare(String(b.payment_date)))).map((p:any,i:number)=>(
+                <PaymentRow key={p.id??i} r={p} first={i===0}/>
               ))}
               {/* Total */}
               <div style={{padding:'9px 12px',backgroundColor:C.navy,
@@ -660,7 +662,7 @@ function MonthlyReportTab({base}:{base:string}){
             // One rule for both the list and the "all paid" message
             const pays = data?.payments||[];
             const unpaid = (data?.roster||[])
-              .filter((s:any)=>s.status==='Active' && !pays.find((p:any)=>p.id===s.id||p.student_id===s.id||p.student_name===s.name))
+              .filter((s:any)=>s.status==='Active' && !pays.find((p:any)=>p.student_id===s.id||(p.student_name&&p.student_name===s.name)))
               .sort((a:any,b:any)=>(Number(a.qca_id)||9999)-(Number(b.qca_id)||9999));
             return (
             <div style={{padding:'8px 10px 0'}}>
