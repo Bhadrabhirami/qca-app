@@ -14,10 +14,12 @@ import { Share } from '@capacitor/share';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
+// `navy` is the accent for selected chips, list title bars and headings —
+// the app green, so Utilities matches the other screens
 const C = {
-  navy:'#001f3f', gold:'#c5a059', green:'#1a472a',
-  red:'#dc2626', blue:'#2563eb', bg:'#f0f2f5',
-  card:'#fff', border:'#e5e7eb', muted:'#6b7280',
+  navy:'#1a472a', gold:'#d4af37', green:'#1a472a',
+  red:'#dc2626', blue:'#2563eb', bg:'#f4f7f6',
+  card:'#fff', border:'#e8e8e8', muted:'#6b7280',
 };
 
 function bld(ip:string){const h=(ip||'').trim().replace(/\/+$/,'');return h.startsWith('http')?h:`http://${h}`;}
@@ -2052,11 +2054,9 @@ export default function UtilitiesScreen(){
   const [tab,setTab] = useState<UtilTab>(TABS[0][0]);
 
   return(
-    <div style={{backgroundColor:C.bg,minHeight:'100vh',fontFamily:'sans-serif',paddingBottom:40}}>
-      <ScreenHeader background={`linear-gradient(135deg,${C.navy} 0%,#0d2b4a 100%)`}
-        title={<span style={{color:C.gold}}>🛠 Utilities</span>}
-        subtitle="Admin monitoring & reports">
-        <HeaderTabs color={C.navy} value={tab} onChange={k=>setTab(k as UtilTab)}
+    <div style={{backgroundColor:'#f4f7f6',minHeight:'100%',fontFamily:'sans-serif',paddingBottom:24}}>
+      <ScreenHeader title="Utilities" subtitle="Admin monitoring & reports">
+        <HeaderTabs value={tab} onChange={k=>setTab(k as UtilTab)}
           tabs={TABS.map(([id,label])=>({id:id as UtilTab,label}))} />
       </ScreenHeader>
 
