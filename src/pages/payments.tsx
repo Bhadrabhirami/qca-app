@@ -24,6 +24,7 @@ import {
   getLastAttendanceMap,
   getAllPaymentSummaries,
   getRecentPayments,
+  getPaymentsForMonth,
   applyWriteOffLocally,
   applyPaymentLocally,
   getFeeCategories,
@@ -1686,6 +1687,22 @@ export default function PaymentsScreen() {
   const [inactiveDays, setInactiveDays] = useState(14);
   const canAlerts = can('payments:alerts');
   const [tab, setTab] = useState<'alerts'|'recent'>(canAlerts ? 'alerts' : 'recent');
+  // "Paid" list shows one month at a time — this month by default
+  const thisMonth = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
+  const [payMonth, setPayMonth] = useState(thisMonth);
+  const payMonthRef = React.useRef(thisMonth);
+  const shiftMonth = (delta: number) => {
+    const [y, m] = payMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if (ym > thisMonth) return;                 // no future months
+    payMonthRef.current = ym; setPayMonth(ym);
+    getPaymentsForMonth(ym).then(setRecentPmts).catch(() => setRecentPmts([]));
+  };
+  const goThisMonth = () => {
+    payMonthRef.current = thisMonth; setPayMonth(thisMonth);
+    getPaymentsForMonth(thisMonth).then(setRecentPmts).catch(() => setRecentPmts([]));
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1718,29 +1735,17 @@ export default function PaymentsScreen() {
         setDueStudents([]);
         setOverview(null);
       } else {
-        const [ov, dues, studs, lastAtt] = await Promise.all([
+        const [ov, dues, lastAtt, monthPmts] = await Promise.all([
           getPaymentOverview(),
           getStudentsWithDues(),
-          getAllStudents(),
           getLastAttendanceMap(),
+          // Every student payment received in the selected month (one query, all students)
+          getPaymentsForMonth(payMonthRef.current),
         ]);
         setOverview(ov);
         setDueStudents(dues);
         setLastAttendance(lastAtt);
-        const allPmts: any[] = [];
-        for (const s of studs.filter((s: any) => !['Club Member','Inactive'].includes(s.status)).slice(0, 50)) {
-          const pmts = await getStudentPayments(s.id);
-          pmts.filter((p: any) => [1,2,15].includes(p.fee_type_id)).forEach((p: any) => {
-            allPmts.push({ ...p, student_name: s.name, profile_image: s.profile_image ?? null,
-              regno: s.regno ?? null, qca_id: s.qca_id ?? null });
-          });
-        }
-        allPmts.sort((a, b) => {
-          const da = b.payment_date || normMonth(b.billing_month) || '';
-          const db2 = a.payment_date || normMonth(a.billing_month) || '';
-          return da.localeCompare(db2);
-        });
-        setRecentPmts(allPmts.slice(0, 20));
+        setRecentPmts(monthPmts);
       }
     } finally { setLoading(false); }
   }, []);
@@ -1829,7 +1834,7 @@ export default function PaymentsScreen() {
               cursor: 'pointer', fontWeight: 700, fontSize: 13,
               backgroundColor: tab === 'recent' ? '#fff' : 'transparent',
               color: tab === 'recent' ? C2.green : 'rgba(255,255,255,0.8)',
-            }}>🕐 Recent Paid</button>
+            }}>✅ Paid</button>
           )}
         </div>
         <div style={{ height: 12 }} />
@@ -1940,10 +1945,41 @@ export default function PaymentsScreen() {
                 </div>
               </div>
             )}
+            {/* Month picker + summary (staff view — the restricted view lists all of the user's own payments) */}
+            {!restricted && (() => {
+              const [y, m] = payMonth.split('-').map(Number);
+              const label = new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+              const total = recentPmts.reduce((a: number, p: any) => a + (Number(p.amount_paid) || 0), 0);
+              const people = new Set(recentPmts.map((p: any) => p.student_id)).size;
+              const atNow = payMonth >= thisMonth;
+              const arrow = (on: boolean): React.CSSProperties => ({ width: 34, height: 30, borderRadius: 8, border: 'none', fontSize: 18, fontWeight: 800,
+                backgroundColor: on ? '#f0f4f0' : 'transparent', color: on ? C2.green : '#d1d5db', cursor: on ? 'pointer' : 'default' });
+              return (
+                <div style={{ ...LIST_CARD, marginBottom: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px' }}>
+                    <button onClick={() => shiftMonth(-1)} aria-label="Previous month" style={arrow(true)}>‹</button>
+                    <div style={{ flex: 1, textAlign: 'center' }}>
+                      <div style={{ fontWeight: 800, fontSize: 14, color: '#1f2937' }}>{label}</div>
+                      {!atNow && <button onClick={goThisMonth}
+                        style={{ background: 'none', border: 'none', padding: 0, color: C2.green, fontSize: 11, fontWeight: 800, cursor: 'pointer' }}>Back to this month</button>}
+                    </div>
+                    <button onClick={() => shiftMonth(1)} disabled={atNow} aria-label="Next month" style={arrow(!atNow)}>›</button>
+                  </div>
+                  <div style={{ display: 'flex', borderTop: '1px solid #eef0f2', backgroundColor: '#fafafa' }}>
+                    {[[String(recentPmts.length), 'Payments'], [fmtAmt(total), 'Collected'], [String(people), 'Students']].map(([v, l], i) => (
+                      <div key={l} style={{ flex: 1, padding: '6px 4px', textAlign: 'center', borderLeft: i ? '1px solid #eef0f2' : 'none' }}>
+                        <div style={{ fontSize: 15, fontWeight: 900, color: C2.green }}>{v}</div>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: C2.muted, textTransform: 'uppercase', letterSpacing: '0.4px' }}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
             {recentPmts.length === 0 && !loading && (
-              <div style={{ textAlign: 'center', padding: '48px 0', color: C2.muted }}>
-                <div style={{ fontSize: 40, marginBottom: 8 }}>📭</div>
-                <div style={{ fontWeight: 700 }}>No payment records found</div>
+              <div style={{ ...LIST_CARD, textAlign: 'center', padding: '28px 16px', color: C2.muted }}>
+                <div style={{ fontSize: 30, marginBottom: 6 }}>📭</div>
+                <div style={{ fontWeight: 700 }}>{restricted ? 'No payment records found' : 'No payments received this month yet'}</div>
               </div>
             )}
             {recentPmts.length > 0 && (
@@ -1965,10 +2001,18 @@ export default function PaymentsScreen() {
                         </span>
                         {` · ${fmtPaymentMonth(p)} · ${p.payment_mode || 'Cash'}`}
                       </div>
+                      {p.fee_type_name && !/^\d+$/.test(String(p.fee_type_name)) && (
+                        <div style={{ fontSize: 11, color: C2.muted, marginTop: 1, overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' as const }}>
+                          {p.fee_type_name}{p.receipt_no ? ` · 🧾 ${p.receipt_no}` : ''}
+                        </div>
+                      )}
                     </div>
                     <div style={{ textAlign: 'right' as const, flexShrink: 0 }}>
                       <div style={{ fontWeight: 800, fontSize: 14, color: C2.green }}>{fmtAmt(p.amount_paid || 0)}</div>
-                      <div style={{ fontSize: 10, color: C2.muted, marginTop: 2 }}>{p.payment_date || ''}</div>
+                      <div style={{ fontSize: 10, color: C2.muted, marginTop: 2 }}>{(() => {
+                        const d = new Date(String(p.payment_date || '').slice(0, 10) + 'T00:00:00');
+                        return isNaN(d.getTime()) ? (p.payment_date || '') : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+                      })()}</div>
                     </div>
                   </div>
                 ))}

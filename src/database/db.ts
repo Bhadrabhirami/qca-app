@@ -2845,10 +2845,27 @@ export const getRecentPayments = async (limit = 200): Promise<any[]> => {
     `SELECT p.*, s.profile_image
      FROM payments p
      LEFT JOIN students s ON s.id = p.student_id
-     WHERE p.txn_direction = 'IN'
+     -- txn_direction is 'IN' or 'INCOME' depending on how the row was entered
+     WHERE UPPER(COALESCE(p.txn_direction, 'IN')) NOT IN ('OUT', 'EXPENSE')
      ORDER BY p.payment_date DESC, p.id DESC
      LIMIT ?`,
     [limit]
+  );
+};
+
+/** All student payments received in a month ('YYYY-MM'), newest first, with student details */
+export const getPaymentsForMonth = async (ym: string): Promise<any[]> => {
+  const db = await getDb();
+  return queryRows(db,
+    `SELECT p.*, COALESCE(s.name, p.student_name) AS student_name,
+            s.profile_image, s.regno, s.qca_id
+     FROM payments p
+     JOIN students s ON s.id = p.student_id
+     WHERE substr(p.payment_date, 1, 7) = ?
+       -- txn_direction is 'IN' or 'INCOME' depending on how the row was entered
+       AND UPPER(COALESCE(p.txn_direction, 'IN')) NOT IN ('OUT', 'EXPENSE')
+     ORDER BY p.payment_date DESC, p.id DESC`,
+    [ym]
   );
 };
 

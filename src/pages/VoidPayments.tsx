@@ -66,7 +66,8 @@ export default function VoidPaymentsScreen() {
   };
 
   const unposted = receipts.filter(r => !r.is_posted);
-  const isOut    = (r: any) => r.txn_direction === 'OUT';
+  // Category type first (txn_direction is 'OUT' or 'EXPENSE' depending on how the row was entered)
+  const isOut    = (r: any) => ['OUT', 'EXPENSE'].includes(String(r.category_type || r.txn_direction || '').toUpperCase());
   const totalIn  = unposted.filter(r => !isOut(r)).reduce((a, r) => a + Number(r.amount_paid || 0), 0);
   const totalOut = unposted.filter(isOut).reduce((a, r) => a + Number(r.amount_paid || 0), 0);
 
