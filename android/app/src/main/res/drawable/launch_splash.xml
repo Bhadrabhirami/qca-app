@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch screen before the web app draws (Android 11 and older):
+     navy background with the QCA logo centred, same look as the in-app boot screen. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background"/>
+    <item>
+        <bitmap android:gravity="center" android:src="@drawable/splash_logo"/>
+    </item>
+</layer-list>

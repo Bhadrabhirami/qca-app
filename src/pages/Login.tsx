@@ -302,10 +302,9 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
 
       {/* Logo */}
       <div style={{textAlign:'center' as const,marginBottom:24}}>
-        <div style={{width:72,height:72,borderRadius:'50%',
-          backgroundColor:'rgba(197,160,89,0.15)',border:`2px solid ${C.gold}`,
-          display:'flex',alignItems:'center',justifyContent:'center',
-          margin:'0 auto 12px',fontSize:32}}>🏏</div>
+        <img src="/logo_256.jpg" alt="Quickies Cricket Academy" draggable={false}
+          style={{width:96,height:96,objectFit:'contain',display:'block',margin:'0 auto 12px',
+            borderRadius:'50%',filter:'drop-shadow(0 6px 18px rgba(0,0,0,0.45))'}}/>
         <div style={{color:'#fff',fontWeight:900,fontSize:22}}>Quickies Cricket Academy</div>
         <div style={{color:'rgba(255,255,255,0.4)',fontSize:12,marginTop:3}}>Management System</div>
       </div>

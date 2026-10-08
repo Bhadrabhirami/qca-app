@@ -136,15 +136,10 @@ function LockScreen({ onUnlock }: { onUnlock: () => void }) {
     }}>
       {/* Logo */}
       <div style={{ marginBottom:40, textAlign:'center' }}>
-        <div style={{
-          width:84, height:84, borderRadius:'50%',
-          backgroundColor:'rgba(212,175,55,0.12)',
-          border:`2px solid ${C.gold}55`,
-          display:'flex', alignItems:'center', justifyContent:'center',
-          margin:'0 auto 14px',
-        }}>
-          <span style={{ fontSize:44 }}>🏏</span>
-        </div>
+        <img src="/logo_256.jpg" alt="Quickies Cricket Academy" draggable={false} style={{
+          width:96, height:96, objectFit:'contain', display:'block', margin:'0 auto 14px',
+          borderRadius:'50%', filter:'drop-shadow(0 6px 18px rgba(0,0,0,0.45))',
+        }}/>
         <div style={{ color:'#fff', fontWeight:800, fontSize:22 }}>QCA</div>
         <div style={{ color:C.gold, fontSize:11, letterSpacing:'2px', marginTop:4 }}>
           QUICKIES CRICKET ACADEMY

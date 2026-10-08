@@ -74,7 +74,7 @@ function BootSplash({ onReady }: { onReady: () => void }) {
     }}>
       {/* Logo / emblem */}
       <img
-        src="/images/emblem.png"
+        src="/logo_256.jpg"
         alt="QCA"
         onError={e => (e.currentTarget.style.display = 'none')}
         style={{
@@ -161,6 +161,10 @@ function BootSplash({ onReady }: { onReady: () => void }) {
 // ── Root component — controls boot sequence ───────────────────────────────────
 function Root() {
   const [ready, setReady] = useState(false);
+
+  // index.html paints the body navy so there's no white flash before this mounts;
+  // hand back to the normal light background once the app is ready
+  useEffect(() => { if (ready) document.body.style.backgroundColor = ''; }, [ready]);
 
   if (!ready) {
     return <BootSplash onReady={() => setReady(true)} />;
