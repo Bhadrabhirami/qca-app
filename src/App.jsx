@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { HashRouter, Route, Routes, Outlet } from 'react-router-dom';
 import { useSyncService, fullRefreshFromServer } from './pages/useSyncService';
 import UtilitiesScreen           from './pages/utilities';
+import { KpiDashboard, KpiList, KpiStudent } from './pages/kpi';
 import AttendanceCorrectionScreen from './pages/attendance_correction';
 import LibraryScreen     from './pages/library';
 import VideosScreen      from './pages/videos';
@@ -581,6 +582,9 @@ export default function App() {
           <Route path="/sync"       element={<PermRoute slug="sync:students"><SyncScreen /></PermRoute>} />
           <Route path="/settings"   element={<SettingsScreen />} />
           <Route path="/utilities"  element={<PermRoute slug="student:view"><UtilitiesScreen /></PermRoute>} />
+          <Route path="/kpi"              element={<PermRoute slug="student:view"><KpiDashboard /></PermRoute>} />
+          <Route path="/kpi/list"         element={<PermRoute slug="student:view"><KpiList /></PermRoute>} />
+          <Route path="/kpi/student/:id"  element={<PermRoute slug="student:view"><KpiStudent /></PermRoute>} />
           <Route path="/attendance-correction" element={<PermRoute slug="attendance:delete"><AttendanceCorrectionScreen /></PermRoute>} />
           <Route path="/library"    element={<PermRoute slug="app:library"><LibraryScreen /></PermRoute>} />
           <Route path="/videos"     element={<PermRoute slug="app:videos"><VideosScreen /></PermRoute>} />
