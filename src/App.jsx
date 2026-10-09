@@ -18,6 +18,7 @@ import { jwtLogin } from './pages/jwtAuth';
 import { loadSavedLogin, forgetPassword } from './pages/savedLogin';
 import AppLock   from './pages/AppLock';
 import LoginPage from './pages/Login';
+import LoginLanding from './pages/LoginLanding';
 import BottomNav from './shared/BottomNav';
 import MoreScreen from './pages/more';
 import * as db from './database/db';
@@ -501,6 +502,8 @@ export default function App() {
 
   // Biometric verified → leave the lock screen. The session flag tells
   // AppLock to skip its PIN pad right after a biometric unlock.
+  const [bioBusy, setBioBusy] = React.useState(false);
+  const [bioMsg,  setBioMsg]  = React.useState('');
   const onBioUnlock = async () => {
     sessionStorage.setItem('qca_bio_unlocked', String(Date.now()));
     // Fingerprint passed. If the 8-hour session has ended, renew it with the
@@ -522,45 +525,36 @@ export default function App() {
     setBioLocked(false);
   };
 
-  // Show biometric lock screen if enabled
+  // Biometric lock: the same slides screen as sign-in, with "Unlock with fingerprint"
   if (bioLocked) {
-    return (
-      <div style={{position:'fixed',inset:0,backgroundColor:'#001f3f',display:'flex',flexDirection:'column',
-        alignItems:'center',justifyContent:'center',fontFamily:'sans-serif',padding:32}}>
-        <div style={{fontSize:72,marginBottom:24}}>🔐</div>
-        <div style={{fontWeight:900,fontSize:22,color:'#fff',marginBottom:8}}>
-          QCA Academy
-        </div>
-        <div style={{fontSize:14,color:'rgba(255,255,255,0.6)',marginBottom:40}}>
-          Verify your identity to continue
-        </div>
-        <button onClick={async () => {
-          try {
-            await BiometricAuth.authenticate({
-              reason: 'Verify your identity to access QCA',
-              cancelTitle: 'Use Password',
-              androidTitle: 'QCA Academy',
-              androidSubtitle: 'Touch fingerprint sensor to continue',
-              androidConfirmationRequired: false,
-            });
-            onBioUnlock();
-          } catch(e) {
-            // On cancel/fail - show password login (do NOT set bio_unlocked flag)
-            sessionStorage.removeItem('qca_bio_unlocked');
-            setBioLocked(false);
-            setJwtUser(null);
-          }
-        }}
-          style={{width:'100%',maxWidth:300,padding:18,borderRadius:16,border:'none',
-            backgroundColor:'#d4af37',color:'#001f3f',fontWeight:900,fontSize:16,cursor:'pointer',marginBottom:16}}>
-          👆 Use Biometric
-        </button>
-        <button onClick={() => { sessionStorage.removeItem('qca_bio_unlocked'); setBioLocked(false); setJwtUser(null); }}
-          style={{background:'none',border:'none',color:'rgba(255,255,255,0.5)',fontSize:14,cursor:'pointer',padding:8}}>
-          Use Password Instead
-        </button>
-      </div>
-    );
+    const usePassword = () => {
+      sessionStorage.removeItem('qca_bio_unlocked');
+      sessionStorage.setItem('qca_login_form', '1');   // open the login page on the form, not the slides
+      setBioLocked(false);
+      setJwtUser(null);
+    };
+    const unlock = async () => {
+      setBioMsg('');
+      try {
+        await BiometricAuth.authenticate({
+          reason: 'Verify your identity to access QCA',
+          cancelTitle: 'Cancel',
+          androidTitle: 'Quickies Cricket Academy',
+          androidSubtitle: 'Touch the fingerprint sensor to continue',
+          androidConfirmationRequired: false,
+        });
+      } catch (e) {
+        // Cancelled: stay here to try again; a real failure says so (password link is right below)
+        const code = e?.code || '';
+        if (code !== 'userCancel' && code !== 'systemCancel' && code !== 'appCancel')
+          setBioMsg('Fingerprint not recognised. Try again or use your password.');
+        return;
+      }
+      setBioBusy(true);
+      try { await onBioUnlock(); } finally { setBioBusy(false); }
+    };
+    return <LoginLanding fingerprint onFingerprint={unlock} onSignIn={usePassword} busy={bioBusy} error={bioMsg}
+      fingerprintLabel="👆 Unlock with fingerprint" passwordLabel="Use password instead"/>;
   }
 
   // Show login page if not authenticated (after ALL hooks)

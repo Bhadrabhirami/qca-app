@@ -7,6 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { jwtLogin, checkPasswordStrength } from './jwtAuth';
 import { BiometricAuth, BiometryError } from '@aparajita/capacitor-biometric-auth';
 import { saveUserContext } from './usePermissions';
+import LoginLanding from './LoginLanding';
 import { getLastUsername, setLastUsername, canRememberPassword, savePassword, loadSavedLogin, hasSavedLogin, forgetPassword } from './savedLogin';
 
 const C = {
@@ -101,6 +102,12 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
 
   // Forgot password
   const [screen,   setScreen]   = useState<Screen>('login');
+  // Slides + sign-in button first; the form opens from there
+  const [landing,  setLanding]  = useState(() => {
+    const toForm = sessionStorage.getItem('qca_login_form') === '1';   // set by the lock screen
+    sessionStorage.removeItem('qca_login_form');
+    return !toForm;
+  });
   const [fpEmail,  setFpEmail]  = useState('');
   const [otp,      setOtp]      = useState('');
   const [fpToken,  setFpToken]  = useState('');
@@ -296,9 +303,24 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
     boxSizing:'border-box' as const, backgroundColor:'#fff', ...extra
   });
 
+  if (landing && screen === 'login' && !showSetup) {
+    return <LoginLanding onSignIn={() => { setLanding(false); setError(''); }}
+      fingerprint={savedAvail && biometricAvailable} onFingerprint={fingerprintLogin}
+      busy={loading} error={error}/>;
+  }
+
   return (
     <div style={{minHeight:'100vh',backgroundColor:C.navy,display:'flex',
       flexDirection:'column' as const,alignItems:'center',justifyContent:'center',padding:20}}>
+
+      {/* Back to the slides */}
+      {screen==='login' && !showSetup && (
+        <button onClick={()=>{setLanding(true);setError('');}}
+          style={{position:'absolute' as const,top:'calc(env(safe-area-inset-top, 0px) + 12px)',left:12,
+            background:'none',border:'none',color:'rgba(255,255,255,0.75)',fontSize:14,fontWeight:700,cursor:'pointer',padding:8}}>
+          ← Back
+        </button>
+      )}
 
       {/* Logo */}
       <div style={{textAlign:'center' as const,marginBottom:24}}>
