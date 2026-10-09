@@ -3,6 +3,7 @@ import { HashRouter, Route, Routes, Outlet } from 'react-router-dom';
 import { useSyncService, fullRefreshFromServer } from './pages/useSyncService';
 import UtilitiesScreen           from './pages/utilities';
 import { KpiDashboard, KpiList, KpiStudent } from './pages/kpi';
+import { MemberFees, MemberFeeDetail } from './pages/member_fees';
 import AttendanceCorrectionScreen from './pages/attendance_correction';
 import LibraryScreen     from './pages/library';
 import VideosScreen      from './pages/videos';
@@ -585,6 +586,9 @@ export default function App() {
           <Route path="/kpi"              element={<PermRoute slug="student:view"><KpiDashboard /></PermRoute>} />
           <Route path="/kpi/list"         element={<PermRoute slug="student:view"><KpiList /></PermRoute>} />
           <Route path="/kpi/student/:id"  element={<PermRoute slug="student:view"><KpiStudent /></PermRoute>} />
+          {/* Member fees check admin / members:fees themselves (office bearers may get it later) */}
+          <Route path="/member-fees"      element={<MemberFees />} />
+          <Route path="/member-fees/:id"  element={<MemberFeeDetail />} />
           <Route path="/attendance-correction" element={<PermRoute slug="attendance:delete"><AttendanceCorrectionScreen /></PermRoute>} />
           <Route path="/library"    element={<PermRoute slug="app:library"><LibraryScreen /></PermRoute>} />
           <Route path="/videos"     element={<PermRoute slug="app:videos"><VideosScreen /></PermRoute>} />

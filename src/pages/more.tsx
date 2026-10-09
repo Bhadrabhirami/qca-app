@@ -9,7 +9,7 @@ import {
   IconHistory, IconChartBar, IconChartPie, IconEdit,
   IconTrophy, IconBook, IconBrandYoutube, IconNews, IconPhoto, IconCamera,
   IconRefresh, IconTool, IconSettings, IconMail, IconInfoCircle, IconCalendar,
-  IconTrash, IconLogout, IconChartLine,
+  IconTrash, IconLogout, IconChartLine, IconCoin,
 } from '@tabler/icons-react';
 
 const C = { green: '#1a472a', gold: '#d4af37' };
@@ -53,6 +53,7 @@ const GROUPS: Group[] = [
     items: [
       { Icon: IconRefresh,  label: 'Sync',       sub: 'Pull & push server data',     path: 'syncscreen', slug: 'sync:any' },
       { Icon: IconChartLine, label: 'KPI Dashboard', sub: 'Attendance, fees & match KPIs', path: 'kpi', slug: 'kpi:view' },
+      { Icon: IconCoin,     label: 'Member Fees', sub: 'Club membership subscriptions', path: 'member-fees', slug: 'members:fees' },
       { Icon: IconTool,     label: 'Utilities',  sub: 'Admin monitoring & reports',  path: 'utilities',  slug: 'student:view', adminOnly: true },
       { Icon: IconTrash,    label: 'Void Payments', sub: 'Cancel a recent unposted receipt', path: 'void-payments', slug: 'payments:writeoff' },
       { Icon: IconSettings, label: 'Settings',   sub: 'Server & app configuration',  path: 'settings',   slug: 'app:settings' },
@@ -93,6 +94,7 @@ export default function MoreScreen() {
   const checkPerm = (slug: string) =>
     slug === 'sync:any'   ? hasSyncAccess :
     slug === 'kpi:view'   ? isAdmin || canPerm(slug) :
+    slug === 'members:fees' ? isAdmin || canPerm(slug) :
     ALWAYS_SHOW.has(slug) ? true          :
     canPerm(slug);
 
