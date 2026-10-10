@@ -61,6 +61,7 @@ import NetsHubScreen    from './pages/nets_hub';
 import NetsStaffScreen   from './pages/nets_staff';
 import NetsAdminScreen   from './pages/nets_admin';
 import NetsCalendarScreen from './pages/nets_calendar';
+import NetsBookScreen, { canBookNets } from './pages/nets_book';
 
 // ─── Student/Parent auto-sync — pulls own data silently on login ──────────────
 async function studentAutoSync(base, headers, linkedIds) {
@@ -604,10 +605,13 @@ export default function App() {
           <Route path="/finance"    element={<PermRoute slug="payments:record"><FinanceScreen /></PermRoute>} />
                 <Route path="/void-payments" element={<PermRoute slug="payments:void"><VoidPaymentsScreen /></PermRoute>} />
                 <Route path="/coach-roster" element={<CoachRosterScreen />} />
-          <Route path="/nets-hub"   element={<PermRoute slug="nets:view"><NetsHubScreen /></PermRoute>} />
+          {/* Hub also opens for roles that can only book for someone (nets:book) */}
+          <Route path="/nets-hub"   element={canBookNets() ? <NetsHubScreen /> : <PermRoute slug="nets:view"><NetsHubScreen /></PermRoute>} />
           <Route path="/nets"       element={<PermRoute slug="nets:view"><NetsStaffScreen /></PermRoute>} />
           <Route path="/nets-admin"    element={<PermRoute slug="nets:admin"><NetsAdminScreen /></PermRoute>} />
           <Route path="/nets-calendar" element={<PermRoute slug="nets:view"><NetsCalendarScreen /></PermRoute>} />
+          {/* Book for someone checks admin / nets:book itself (assignable to any role) */}
+          <Route path="/nets-book"     element={<NetsBookScreen />} />
         </Route>
       </Routes>
     </HashRouter>

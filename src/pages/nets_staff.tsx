@@ -1,25 +1,21 @@
 /**
  * nets_staff.tsx — Net Booking: Staff / Coach View
- * Permissions: nets:view (list/calendar), nets:manage (mark paid/cancel)
+ * Permissions: nets:view (list/calendar), nets:manage (mark paid / no-show / cancel / expire),
+ * nets:book or admin (Book for someone)
  *
  * Tabs:
- *   Today     — today's bookings for quick ground-level ops
- *   Bookings  — full list with filters
- *   Verify    — enter booking ref → show detail → mark paid / cancel
+ *   Today     — today's bookings in start-time order for ground-level ops
+ *   Bookings  — full list with filters (load more)
+ *   Verify    — scan QR / enter booking ref → same booking card and actions
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { BarcodeScanner } from '@capacitor-community/barcode-scanner';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
 import { useNavigate } from 'react-router-dom';
-import { usePermissions } from './usePermissions';
-
-const NET_NAMES: Record<string,string> = {
-  syn1: 'Synthetic Turf 1',
-  syn2: 'Synthetic Turf 2',
-  con:  'Concrete Wicket',
-  mat:  'Matting Wicket',
-};
+import { usePermissions, can } from './usePermissions';
+import { canBookNets } from './nets_book';
+import { localIso, fmtAmt, fmtDay, netApi, netMsg, slotLines, firstSlotMinutes, isFree, shareBookingUrl, shareBooking } from './nets_util';
 
 const C = {
   navy:   '#0d1b2a',
@@ -31,28 +27,6 @@ const C = {
   muted:  '#6b7280',
   red:    '#dc2626',
 };
-
-function bld() {
-  const ip = (localStorage.getItem('server_ip') || '').trim().replace(/\/+$/, '');
-  return ip.startsWith('http') ? ip : `http://${ip}`;
-}
-function hdr() {
-  const jwt = localStorage.getItem('jwt_token');
-  const exp = parseInt(localStorage.getItem('jwt_expiry') || '0');
-  if (jwt && exp) {
-    if (Date.now() > exp) {
-      // Token expired - trigger auto logout
-      window.dispatchEvent(new Event('jwt-expired'));
-      return {};
-    }
-    return {'Content-Type':'application/json','Authorization':'Bearer '+jwt,'X-Username':localStorage.getItem('auth_user')||''};
-  }
-  return {
-    'Content-Type': 'application/json',
-    'X-Username':   localStorage.getItem('auth_user') ?? '',
-    'X-Password':   localStorage.getItem('auth_pass') ?? '',
-  };
-}
 const STATUS_COLOR: Record<string, string> = {
   confirmed:  '#16a34a',
   cancelled:  '#dc2626',
@@ -75,76 +49,83 @@ function Badge({ label, color }: { label: string; color: string }) {
   );
 }
 
-function BookingCard({ b, onAction }: { b: any; onAction: () => void }) {
-  const base = bld();
+/** One booking with its nets, times and the actions this user may take */
+export function BookingCard({ b, canManage, onAction, highlight }: { b: any; canManage: boolean; onAction: () => void; highlight?: boolean }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
+  const today = localIso();
+  const day = String(b.booking_date || '').slice(0, 10);
+  const live = b.status === 'confirmed';
+  const owes = live && !isFree(b) && b.payment_status === 'pending';
+  const paid = b.payment_status === 'paid' || Number(b.amount_paid || 0) > 0;
+  // Undoing a payment reverses money: admins only (nets:admin)
+  const canUndoPay = (localStorage.getItem('user_role') || '').toLowerCase() === 'admin' || can('nets:admin' as any);
 
-  const action = async (endpoint: string, label: string) => {
-    if (!confirm(`${label} booking ${b.booking_ref}?`)) return;
+  const act = async (path: string, done: string, body?: any) => {
     setLoading(true); setMsg('');
-    try {
-      const r = await fetch(`${base}/api/data/nets${endpoint}`, { method: 'POST', headers: hdr() });
-      const j = await r.json();
-      if (r.ok) { setMsg('✓ Done'); onAction(); }
-      else setMsg(j.error || 'Error');
-    } catch { setMsg('Network error'); }
+    try { await netApi(path, body || {}); setMsg(`✓ ${done}`); onAction(); }
+    catch (e) { setMsg(netMsg(e)); }
     finally { setLoading(false); }
   };
+  const markPaid = () => { if (confirm(`Mark ${fmtAmt(b.total_amount)} paid for ${b.booking_ref}?`)) act(`/bookings/${b.booking_ref}/paid`, 'Marked paid'); };
+  const noShow = () => { if (confirm(`${b.member_name || 'They'} didn't turn up?\nThe net is released for walk-ins.${b.payment_status === 'paid' ? '\nThe payment stays recorded (no refund).' : ''}`)) act(`/bookings/${b.booking_ref}/no-show`, 'Marked no-show — net released'); };
+  const cancel = () => {
+    const reason = window.prompt(`Cancel ${b.booking_ref}? The slots are released.\n\nReason (optional):`, '');
+    if (reason === null) return;
+    act(`/bookings/${b.booking_ref}/cancel`, 'Cancelled', { reason });
+  };
+  const undoPay = () => {
+    const reason = window.prompt(`Undo the ${fmtAmt(b.amount_paid || b.total_amount)} payment on ${b.booking_ref}?\nIt goes back to "payment pending" — then it can be collected again or cancelled.\n\nReason (required, e.g. refunded / marked by mistake):`, '');
+    if (reason === null) return;
+    act(`/bookings/${b.booking_ref}/unpay`, 'Payment undone — now pending', { reason });
+  };
+  const expire = () => { if (confirm(`Expire unpaid booking ${b.booking_ref}? Its slots are released.`)) act(`/bookings/${b.booking_ref}/expire`, 'Expired'); };
+  const past = day < today, isToday = day === today;
+  const btn = (bg: string, fg: string, border?: string): React.CSSProperties => ({ flex: 1, padding: '8px 6px', borderRadius: 8, cursor: 'pointer',
+    border: border ? `1px solid ${border}` : 'none', backgroundColor: bg, color: fg, fontWeight: 800, fontSize: 12 });
 
   return (
-    <div style={{
-      backgroundColor: C.card, borderRadius: 12, padding: '12px 14px',
-      marginBottom: 8, border: `1px solid ${C.border}`,
-      boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontWeight: 900, fontSize: 13, color: C.navy,
-              fontFamily: 'monospace' }}>{b.booking_ref}</span>
-            <Badge label={b.status}  color={STATUS_COLOR[b.status]  || C.muted} />
-            <Badge label={b.payment_status} color={PAY_COLOR[b.payment_status] || C.muted} />
-          </div>
-          <div style={{ fontWeight: 700, fontSize: 14, color: '#111' }}>{b.member_name || '—'}</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
-            📞 {b.mobile || '—'} · {b.booking_date} · {b.session_type === 'day' ? '☀️ Day' : '🌙 Night'}
-          </div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
-            🏏 {b.slot_count} slot{b.slot_count !== 1 ? 's' : ''} · Rs.{b.total_amount || b.amount_due || 0}
-          </div>
-        </div>
+    <div style={{ backgroundColor: C.card, borderRadius: 12, padding: '12px 14px', marginBottom: 8,
+      border: `${highlight ? 2 : 1}px solid ${highlight ? (STATUS_COLOR[b.status] || C.border) : C.border}`, boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+      opacity: live ? 1 : 0.7 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+        <span style={{ fontWeight: 900, fontSize: 13, color: C.navy, fontFamily: 'monospace' }}>{b.booking_ref}</span>
+        <Badge label={b.status} color={STATUS_COLOR[b.status] || C.muted} />
+        {isFree(b) ? <Badge label={b.price_type === 'pass' ? 'pass' : 'free'} color="#7c3aed" />
+          : <Badge label={b.payment_status} color={PAY_COLOR[b.payment_status] || C.muted} />}
       </div>
-      {msg && <div style={{ fontSize: 12, color: msg.startsWith('✓') ? '#16a34a' : C.red,
-        marginTop: 6 }}>{msg}</div>}
-      {b.status === 'confirmed' && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-          {b.payment_status !== 'paid' && (
-            <button onClick={() => action(`/bookings/${b.booking_ref}/paid`, 'Mark paid')}
-              disabled={loading}
-              style={{ flex: 1, padding: '8px', borderRadius: 8, border: 'none',
-                backgroundColor: '#16a34a', color: '#fff', fontWeight: 700,
-                fontSize: 12, cursor: 'pointer' }}>
-              💵 Mark Paid
-            </button>
-          )}
-          <button onClick={() => action(`/bookings/${b.booking_ref}/cancel`, 'Cancel')}
-            disabled={loading}
-            style={{ flex: 1, padding: '8px', borderRadius: 8,
-              border: `1px solid ${C.red}`, backgroundColor: '#fff',
-              color: C.red, fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-            ✕ Cancel
-          </button>
+      <div style={{ fontWeight: 800, fontSize: 14, color: '#111' }}>{b.member_name || '—'}</div>
+      <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
+        {b.mobile ? `📞 ${b.mobile} · ` : ''}{day === today ? 'Today' : fmtDay(day)} · {b.session_type === 'day' ? '☀️ Day' : '🌙 Night'}
+      </div>
+      {slotLines(b).map(l => <div key={l} style={{ fontSize: 12, color: '#111', marginTop: 2, fontWeight: 600 }}>🏏 {l}</div>)}
+      <div style={{ fontSize: 13, fontWeight: 900, color: C.navy, marginTop: 4 }}>
+        {isFree(b) ? 'Free / pass' : fmtAmt(b.total_amount)}
+        {b.booked_by_admin && <span style={{ fontSize: 10.5, color: C.muted, fontWeight: 600 }}> · booked by {b.booked_by_admin}</span>}
+      </div>
+      {b.price_override_reason && <div style={{ fontSize: 10.5, color: C.muted }}>Price changed: {b.price_override_reason}</div>}
+      {!live && b.cancellation_reason && <div style={{ fontSize: 10.5, color: C.muted }}>{b.cancellation_reason}</div>}
+      {msg && <div style={{ fontSize: 12, fontWeight: 700, color: msg.startsWith('✓') ? '#16a34a' : C.red, marginTop: 6 }}>{msg}</div>}
+      {live && paid && !past && canManage && !canUndoPay && (
+        <div style={{ fontSize: 10.5, color: C.muted, marginTop: 6 }}>Paid bookings can't be cancelled — ask an admin to undo the payment first.</div>
+      )}
+      {/* Future: paid / cancel / share · Today: + no-show · Past: only settle what's still owed */}
+      {live && (canManage && owes || !past) && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+          {canManage && owes && <button disabled={loading} onClick={markPaid} style={btn('#16a34a', '#fff')}>💵 Paid</button>}
+          {canManage && isToday && <button disabled={loading} onClick={noShow} style={btn('#fffbeb', '#b45309', '#f59e0b')}>🚫 No-show</button>}
+          {canManage && past && owes && <button disabled={loading} onClick={expire} style={btn('#fffbeb', '#d97706', '#d97706')}>⏱ Expire</button>}
+          {canManage && !past && !paid && <button disabled={loading} onClick={cancel} style={btn('#fff', C.red, C.red)}>✕ Cancel</button>}
+          {canUndoPay && !past && paid && <button disabled={loading} onClick={undoPay} style={btn('#fff', '#6b7280', '#9ca3af')}>↩ Undo payment</button>}
+          {!past && shareBookingUrl(b) && <button onClick={() => shareBooking(b)} style={btn('#25d366', '#fff')}>💬 Share</button>}
         </div>
       )}
     </div>
   );
 }
 
-// ── Today Tab ─────────────────────────────────────────────────────────
-
-// ── Stale Bookings Panel ─────────────────────────────────────────────
-function StaleBookingsPanel({ base, onDone }: { base: string; onDone: ()=>void }) {
+// ── Stale Bookings Panel (unpaid bookings whose time has passed) ─────
+function StaleBookingsPanel({ onDone }: { onDone: () => void }) {
   const [open,    setOpen]    = React.useState(false);
   const [stale,   setStale]   = React.useState<any[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -153,94 +134,74 @@ function StaleBookingsPanel({ base, onDone }: { base: string; onDone: ()=>void }
 
   const loadStale = async () => {
     setLoading(true); setMsg('');
-    try {
-      const r = await fetch(`${base}/api/data/nets/bookings/stale`, { headers: hdr() });
-      const j = await r.json();
-      setStale(j.data || []);
-      setOpen(true);
-    } catch { setMsg('Failed to load'); }
+    try { const j = await netApi('/bookings/stale'); setStale(j.data || []); setOpen(true); }
+    catch (e) { setMsg(netMsg(e)); setOpen(true); }
     finally { setLoading(false); }
   };
-
   const expireOne = async (ref: string) => {
-    if (!confirm(`Expire booking ${ref}?`)) return;
-    setExpiring(ref);
-    try {
-      const r = await fetch(`${base}/api/data/nets/bookings/${ref}/expire`, {
-        method: 'POST', headers: hdr()
-      });
-      if (r.ok) { setStale(prev => prev.filter(b => b.booking_ref !== ref)); setMsg(`Done: ${ref} expired`); }
-    } catch { setMsg('Error'); }
+    if (!confirm(`Expire unpaid booking ${ref}? Its slots are released.`)) return;
+    setExpiring(ref); setMsg('');
+    try { await netApi(`/bookings/${ref}/expire`, {}); setStale(prev => prev.filter(b => b.booking_ref !== ref)); setMsg(`Done: ${ref} expired`); }
+    catch (e) { setMsg(netMsg(e)); }
     finally { setExpiring(null); }
   };
-
   const expireAll = async () => {
-    if (!confirm(`Expire ALL ${stale.length} stale bookings?`)) return;
-    setLoading(true);
-    try {
-      const r = await fetch(`${base}/api/data/nets/bookings/expire-stale`, { method: 'POST', headers: hdr() });
-      const j = await r.json();
-      setMsg(`Done: ${j.expired || 0} bookings expired`);
-      setStale([]); onDone();
-    } catch { setMsg('Error'); }
+    if (!confirm(`Expire ALL ${stale.length} unpaid past bookings? Their slots are released.`)) return;
+    setLoading(true); setMsg('');
+    try { const j = await netApi('/bookings/expire-stale', {}); setMsg(`Done: ${j.expired || 0} bookings expired`); setStale([]); onDone(); }
+    catch (e) { setMsg(netMsg(e)); }
     finally { setLoading(false); }
   };
 
   return (
     <>
-      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:8}}>
-        <button onClick={loadStale} disabled={loading}
-          style={{padding:'6px 14px',borderRadius:20,border:'1px solid #d97706',
-            backgroundColor:'#fffbeb',color:'#d97706',fontSize:11,fontWeight:700,cursor:'pointer'}}>
-          {loading ? 'Loading...' : 'Stale Bookings'}
-        </button>
-      </div>
+      <button onClick={loadStale} disabled={loading}
+        style={{padding:'6px 12px',borderRadius:20,border:'1px solid #d97706',
+          backgroundColor:'#fffbeb',color:'#d97706',fontSize:11.5,fontWeight:800,cursor:'pointer'}}>
+        {loading ? 'Loading…' : '⏱ Unpaid past bookings'}
+      </button>
       {open && (
         <div style={{position:'fixed' as const,inset:0,zIndex:200,backgroundColor:'rgba(0,0,0,0.6)',
-          display:'flex',alignItems:'flex-end' as const}}>
-          <div style={{backgroundColor:'#fff',width:'100%',maxHeight:'80vh',
+          display:'flex',alignItems:'flex-end' as const}} onClick={()=>{setOpen(false);onDone();}}>
+          <div onClick={e=>e.stopPropagation()} style={{backgroundColor:'#fff',width:'100%',maxHeight:'80vh',
             borderRadius:'20px 20px 0 0',overflowY:'auto' as const,paddingBottom:32}}>
             <div style={{padding:'16px',borderBottom:'1px solid #e0e0e0',
               position:'sticky' as const,top:0,backgroundColor:'#fff'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
-                <div style={{fontWeight:900,fontSize:16}}>Stale Bookings ({stale.length})</div>
-                <button onClick={()=>{setOpen(false);onDone();}}
-                  style={{background:'none',border:'none',fontSize:20,cursor:'pointer'}}>x</button>
+                <div style={{fontWeight:900,fontSize:16}}>Unpaid past bookings ({stale.length})</div>
+                <button onClick={()=>{setOpen(false);onDone();}} aria-label="Close"
+                  style={{background:'none',border:'none',fontSize:20,cursor:'pointer'}}>✕</button>
               </div>
-              {msg && <div style={{fontSize:12,color:msg.startsWith('Done')?'#16a34a':'#dc2626',marginBottom:6}}>{msg}</div>}
+              <div style={{fontSize:11.5,color:C.muted,marginBottom:8}}>Their time has passed and nothing was paid. Expiring frees the slots; the record stays.</div>
+              {msg && <div style={{fontSize:12,fontWeight:700,color:msg.startsWith('Done')?'#16a34a':'#dc2626',marginBottom:6}}>{msg}</div>}
               {stale.length > 0 && (
                 <button onClick={expireAll} disabled={loading}
                   style={{width:'100%',padding:9,borderRadius:8,border:'none',
                     backgroundColor:'#dc2626',color:'#fff',fontWeight:800,fontSize:13,cursor:'pointer'}}>
-                  Expire All {stale.length} Bookings
+                  Expire all {stale.length}
                 </button>
               )}
             </div>
             <div style={{padding:'8px 16px'}}>
               {stale.length === 0 && !msg && (
-                <div style={{textAlign:'center',padding:24,color:'#6b7280'}}>No stale bookings</div>
+                <div style={{textAlign:'center',padding:24,color:'#6b7280'}}>Nothing unpaid from the past 👍</div>
               )}
               {stale.map((b:any) => (
                 <div key={b.booking_ref} style={{backgroundColor:'#fafafa',borderRadius:10,
                   padding:'10px 12px',marginBottom:8,border:'1px solid #e0e0e0',
-                  display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <div>
+                  display:'flex',justifyContent:'space-between',alignItems:'center',gap:8}}>
+                  <div style={{minWidth:0}}>
                     <div style={{fontWeight:700,fontSize:12,fontFamily:'monospace'}}>{b.booking_ref}</div>
-                    <div style={{fontWeight:600,fontSize:13}}>{b.member_name}</div>
+                    <div style={{fontWeight:700,fontSize:13}}>{b.member_name}</div>
                     <div style={{fontSize:11,color:'#6b7280'}}>
-                      {b.booking_date} · {b.session_type==='day'?'Day':'Night'} · Rs.{b.total_amount||0}
+                      {fmtDay(b.booking_date)} · {b.session_type==='day'?'Day':'Night'} · {fmtAmt(b.total_amount)}
                     </div>
-                    {b.nets_booked && Object.entries(b.nets_booked).map(([net,slots]:any)=>(
-                      <div key={net} style={{fontSize:10,color:'#6b7280'}}>
-                        {NET_NAMES[net]||net}: {Array.isArray(slots)?slots.join(', '):slots}
-                      </div>
-                    ))}
+                    {slotLines(b).map(l => <div key={l} style={{fontSize:10.5,color:'#6b7280'}}>{l}</div>)}
                   </div>
-                  <button onClick={()=>expireOne(b.booking_ref)}
-                    disabled={expiring===b.booking_ref}
-                    style={{padding:'7px 12px',borderRadius:8,border:'1px solid #d97706',
+                  <button onClick={()=>expireOne(b.booking_ref)} disabled={expiring===b.booking_ref}
+                    style={{padding:'7px 12px',borderRadius:8,border:'1px solid #d97706',flexShrink:0,
                       backgroundColor:'#fffbeb',color:'#d97706',fontWeight:700,fontSize:12,cursor:'pointer'}}>
-                    {expiring===b.booking_ref ? '...' : 'Expire'}
+                    {expiring===b.booking_ref ? '…' : 'Expire'}
                   </button>
                 </div>
               ))}
@@ -252,139 +213,141 @@ function StaleBookingsPanel({ base, onDone }: { base: string; onDone: ()=>void }
   );
 }
 
+// ── Today Tab ─────────────────────────────────────────────────────────
 function TodayTab({ canManage }: { canManage: boolean }) {
-  const base = bld();
-  const today = new Date().toISOString().slice(0, 10);
+  const navigate = useNavigate();
+  const today = localIso();
   const [bookings, setBookings] = useState<any[]>([]);
   const [loading,  setLoading]  = useState(true);
+  const [err,      setErr]      = useState('');
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const r = await fetch(`${base}/api/data/nets/bookings?booking_date=${today}`, { headers: hdr() });
-      const j = await r.json();
-      if (j.data) setBookings(j.data);
-    } catch {} finally { setLoading(false); }
-  }, [base, today]);
+    setLoading(true); setErr('');
+    try { const j = await netApi(`/bookings?booking_date=${today}&limit=200`); setBookings(j.data || []); }
+    catch (e) { setErr(netMsg(e)); }
+    finally { setLoading(false); }
+  }, [today]);
+  useEffect(() => { load(); }, [load]);
 
-  useEffect(() => { load(); }, []);
-
-  const confirmed = bookings.filter(b => b.status === 'confirmed');
-  const paid      = confirmed.filter(b => b.payment_status === 'paid');
-  const pending   = confirmed.filter(b => b.payment_status === 'pending');
+  const live      = bookings.filter(b => b.status === 'confirmed');
+  const toCollect = live.filter(b => !isFree(b) && b.payment_status === 'pending');
+  const collected = live.filter(b => b.payment_status === 'paid').reduce((a, b) => a + Number(b.amount_paid || b.total_amount || 0), 0);
+  // Live bookings first, in start-time order; cancelled / expired at the bottom
+  const ordered = [...bookings].sort((a, b) =>
+    (a.status === 'confirmed' ? 0 : 1) - (b.status === 'confirmed' ? 0 : 1) ||
+    a.session_type.localeCompare(b.session_type) || firstSlotMinutes(a) - firstSlotMinutes(b));
 
   return (
     <div style={{ padding: '12px 0' }}>
-      {/* Summary strip */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 10 }}>
         {[
-          { label: 'Confirmed', val: confirmed.length, color: '#16a34a' },
-          { label: 'Paid',      val: paid.length,      color: '#2563eb' },
-          { label: 'Pending',   val: pending.length,   color: '#d97706' },
+          { label: 'Bookings',   val: String(live.length),          color: '#16a34a' },
+          { label: 'To collect', val: String(toCollect.length),     color: '#d97706' },
+          { label: 'Collected',  val: fmtAmt(collected),            color: '#2563eb' },
         ].map(s => (
           <div key={s.label} style={{ backgroundColor: C.card, borderRadius: 10,
-            padding: '10px 8px', textAlign: 'center', border: `1px solid ${C.border}` }}>
-            <div style={{ fontWeight: 900, fontSize: 22, color: s.color }}>{s.val}</div>
-            <div style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>{s.label}</div>
+            padding: '10px 6px', textAlign: 'center', border: `1px solid ${C.border}` }}>
+            <div style={{ fontWeight: 900, fontSize: 19, color: s.color }}>{s.val}</div>
+            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{s.label}</div>
           </div>
         ))}
       </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        {canBookNets() ? (
+          <button onClick={() => navigate('/nets-book')} style={{ padding: '8px 14px', borderRadius: 20, border: 'none',
+            backgroundColor: C.navy, color: '#fff', fontWeight: 800, fontSize: 12.5, cursor: 'pointer' }}>➕ Book for someone</button>
+        ) : <span/>}
+        {canManage && <StaleBookingsPanel onDone={load}/>}
+      </div>
 
-      {/* Stale Bookings Panel */}
-      <StaleBookingsPanel base={base} onDone={load}/>
-
+      {err && <div style={{ backgroundColor: '#fef2f2', borderRadius: 10, padding: 12, color: C.red, fontSize: 13, marginBottom: 10 }}>⚠ {err}</div>}
       {loading && <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>Loading…</div>}
-      {!loading && bookings.length === 0 && (
+      {!loading && !err && bookings.length === 0 && (
         <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>No bookings today</div>
       )}
-      {bookings.map(b => (
-        <BookingCard key={b.id} b={b} onAction={load}/>
-      ))}
+      {ordered.map(b => <BookingCard key={b.id} b={b} canManage={canManage} onAction={load}/>)}
     </div>
   );
 }
 
 // ── Bookings Tab ──────────────────────────────────────────────────────
-function BookingsTab() {
-  const base = bld();
+const PAGE = 30;
+function BookingsTab({ canManage }: { canManage: boolean }) {
   const [bookings,  setBookings]  = useState<any[]>([]);
   const [loading,   setLoading]   = useState(false);
+  const [hasMore,   setHasMore]   = useState(false);
+  const [err,       setErr]       = useState('');
   const [date,      setDate]      = useState('');
   const [status,    setStatus]    = useState('');
   const [payment,   setPayment]   = useState('');
   const [name,      setName]      = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (more = false) => {
+    setLoading(true); setErr('');
     const p = new URLSearchParams();
     if (date)    p.set('booking_date', date);
     if (status)  p.set('status', status);
     if (payment) p.set('payment', payment);
-    if (name)    p.set('member_name', name);
+    if (name.trim()) p.set('member_name', name.trim());
+    p.set('limit', String(PAGE)); p.set('offset', String(more ? bookings.length : 0));
     try {
-      const r = await fetch(`${base}/api/data/nets/bookings?${p}`, { headers: hdr() });
-      const j = await r.json();
-      if (j.data) setBookings(j.data);
-    } catch {} finally { setLoading(false); }
-  }, [base, date, status, payment, name]);
+      const j = await netApi(`/bookings?${p}`);
+      setBookings(prev => more ? [...prev, ...(j.data || [])] : (j.data || []));
+      setHasMore(!!j.has_more);
+    } catch (e) { setErr(netMsg(e)); }
+    finally { setLoading(false); }
+  }, [date, status, payment, name, bookings.length]);
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(false); }, []); // eslint-disable-line
 
+  const field: React.CSSProperties = { flex: 1, minWidth: 0, padding: '7px 8px', borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 12, outline: 'none', backgroundColor: '#fff' };
   return (
     <div style={{ padding: '12px 0' }}>
-      {/* Filters */}
-      <div style={{ backgroundColor: C.card, borderRadius: 12, padding: 12,
-        marginBottom: 12, border: `1px solid ${C.border}` }}>
-        <input value={name} onChange={e => setName(e.target.value)}
-          placeholder="Search member name…"
-          style={{ width: '100%', padding: '8px 12px', borderRadius: 8, marginBottom: 8,
-            border: `1px solid ${C.border}`, fontSize: 13, outline: 'none',
-            boxSizing: 'border-box' as const }} />
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            style={{ flex: 1, padding: '7px 10px', borderRadius: 8,
-              border: `1px solid ${C.border}`, fontSize: 12, outline: 'none' }} />
-          <select value={status} onChange={e => setStatus(e.target.value)}
-            style={{ flex: 1, padding: '7px 10px', borderRadius: 8,
-              border: `1px solid ${C.border}`, fontSize: 12, outline: 'none' }}>
-            <option value="">All Status</option>
+      <div style={{ backgroundColor: C.card, borderRadius: 12, padding: 12, marginBottom: 12, border: `1px solid ${C.border}` }}>
+        <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === 'Enter' && load(false)}
+          placeholder="Search name…" aria-label="Search name"
+          style={{ ...field, width: '100%', boxSizing: 'border-box' as const, marginBottom: 8, fontSize: 13, padding: '8px 12px' }} />
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Date" style={field} />
+          <select value={status} onChange={e => setStatus(e.target.value)} aria-label="Status" style={field}>
+            <option value="">All status</option>
             <option value="confirmed">Confirmed</option>
             <option value="cancelled">Cancelled</option>
             <option value="expired">Expired</option>
           </select>
-          <select value={payment} onChange={e => setPayment(e.target.value)}
-            style={{ flex: 1, padding: '7px 10px', borderRadius: 8,
-              border: `1px solid ${C.border}`, fontSize: 12, outline: 'none' }}>
-            <option value="">All Payment</option>
+          <select value={payment} onChange={e => setPayment(e.target.value)} aria-label="Payment" style={field}>
+            <option value="">All payment</option>
             <option value="pending">Pending</option>
             <option value="paid">Paid</option>
             <option value="waived">Waived</option>
           </select>
         </div>
-        <button onClick={load} style={{ width: '100%', padding: '9px', borderRadius: 8,
-          border: 'none', backgroundColor: C.navy, color: '#fff', fontWeight: 700,
-          fontSize: 13, cursor: 'pointer' }}>
+        <button onClick={() => load(false)} style={{ width: '100%', padding: '9px', borderRadius: 8,
+          border: 'none', backgroundColor: C.navy, color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
           {loading ? 'Searching…' : '🔍 Search'}
         </button>
       </div>
 
-      {loading && <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>Loading…</div>}
-      {!loading && bookings.length === 0 && (
+      {err && <div style={{ backgroundColor: '#fef2f2', borderRadius: 10, padding: 12, color: C.red, fontSize: 13, marginBottom: 10 }}>⚠ {err}</div>}
+      {!loading && !err && bookings.length === 0 && (
         <div style={{ textAlign: 'center', padding: 32, color: C.muted }}>No bookings found</div>
       )}
-      {bookings.map(b => <BookingCard key={b.id} b={b} onAction={load}/>)}
+      {bookings.map(b => <BookingCard key={b.id} b={b} canManage={canManage} onAction={() => load(false)}/>)}
+      {hasMore && (
+        <button disabled={loading} onClick={() => load(true)} style={{ width: '100%', padding: 10, borderRadius: 10,
+          border: `1px solid ${C.border}`, backgroundColor: '#fff', color: C.navy, fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>
+          {loading ? 'Loading…' : 'Load more'}</button>
+      )}
     </div>
   );
 }
 
 // ── Verify Tab ────────────────────────────────────────────────────────
-function VerifyTab() {
-  const base = bld();
+function VerifyTab({ canManage }: { canManage: boolean }) {
   const [ref,     setRef]     = React.useState('');
   const [booking, setBooking] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(false);
   const [error,   setError]   = React.useState('');
-  const [msg,     setMsg]     = React.useState('');
   const [scanning,setScanning]= React.useState(false);
 
   const startScan = async () => {
@@ -479,14 +442,15 @@ function VerifyTab() {
         // Try last URL path segment
         const seg = raw.replace(/\/+$/, '').split('/').pop() || '';
         const m2  = seg.match(/^QCA[A-Z]-[A-Z0-9]{4,}$/i);
-        const ref = (m1?.[0] || m2?.[0] || '').toUpperCase();
-        if (ref) { setRef(ref); await lookupRef(ref); }
-        else { setError('RAW: ' + raw); }
+        const found = (m1?.[0] || m2?.[0] || '').toUpperCase();
+        if (found) { setRef(found); await lookupRef(found); }
+        else setError("That QR code isn't a net booking ticket. Type the reference instead.");
       }
     } catch {
+      document.getElementById('qr-overlay')?.remove();
       document.querySelector('body')?.classList.remove('scanner-active');
       BarcodeScanner.showBackground();
-      setError('Scanner error - try manual entry');
+      setError('Scanner error — type the reference instead');
     } finally { setScanning(false); }
   };
 
@@ -500,29 +464,9 @@ function VerifyTab() {
   const lookupRef = async (r: string) => {
     const target = (r || ref).trim().toUpperCase();
     if (!target) return;
-    setLoading(true); setError(''); setBooking(null); setMsg('');
-    try {
-      const res = await fetch(`${base}/api/data/nets/bookings/${target}`, { headers: hdr() });
-      const j = await res.json();
-      if (res.ok && j.data) setBooking(j.data);
-      else setError(j.error || 'Booking not found');
-    } catch { setError('Network error'); }
-    finally { setLoading(false); }
-  };
-
-  const action = async (endpoint: string, label: string) => {
-    if (!confirm(label + '?')) return;
-    setLoading(true); setMsg('');
-    try {
-      const r = await fetch(`${base}/api/data/nets${endpoint}`, { method: 'POST', headers: hdr() });
-      const j = await r.json();
-      if (r.ok) {
-        setMsg('Done: ' + label);
-        const r2 = await fetch(`${base}/api/data/nets/bookings/${booking.booking_ref}`, { headers: hdr() });
-        const j2 = await r2.json();
-        if (j2.data) setBooking(j2.data);
-      } else setMsg(j.error || 'Error');
-    } catch { setMsg('Network error'); }
+    setLoading(true); setError(''); setBooking(null);
+    try { const j = await netApi(`/bookings/${encodeURIComponent(target)}`); setBooking(j.data); }
+    catch (e) { setError(/not found/i.test((e as any)?.message || '') ? `No booking ${target}` : netMsg(e)); }
     finally { setLoading(false); }
   };
 
@@ -548,16 +492,16 @@ function VerifyTab() {
           </button>
           <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
             <input value={ref} onChange={e => setRef(e.target.value.toUpperCase())}
-              placeholder="QCAD-XXXXXX"
+              placeholder="QCAN-XXXXXX" aria-label="Booking reference"
               onKeyDown={e => e.key === 'Enter' && lookupRef('')}
-              style={{ flex: 1, padding: '10px 12px', borderRadius: 10,
+              style={{ flex: 1, minWidth: 0, padding: '10px 12px', borderRadius: 10,
                 border: '1px solid #e0e0e0', fontSize: 14, outline: 'none',
                 fontFamily: 'monospace' }}/>
             <button onClick={() => lookupRef('')} disabled={loading}
               style={{ padding: '10px 18px', borderRadius: 10, border: 'none',
                 backgroundColor: '#0d1b2a', color: '#fff', fontWeight: 800,
                 fontSize: 14, cursor: 'pointer' }}>
-              {loading ? '...' : 'Go'}
+              {loading ? '…' : 'Go'}
             </button>
           </div>
         </>
@@ -566,59 +510,15 @@ function VerifyTab() {
       {error && <div style={{ backgroundColor: '#fef2f2', borderRadius: 10, padding: 12,
         color: '#dc2626', fontSize: 13, marginBottom: 10 }}>{error}</div>}
 
-      {booking && (
-        <div style={{ backgroundColor: '#fff', borderRadius: 14, padding: 16,
-          border: '2px solid ' + (STATUS_COLOR[booking.status] || '#e0e0e0') }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span style={{ fontWeight: 900, fontSize: 15, fontFamily: 'monospace',
-              color: '#0d1b2a' }}>{booking.booking_ref}</span>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <Badge label={booking.status} color={STATUS_COLOR[booking.status] || '#6b7280'}/>
-              <Badge label={booking.payment_status} color={PAY_COLOR[booking.payment_status] || '#6b7280'}/>
-            </div>
-          </div>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>{booking.member_name}</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-            {booking.mobile} · {booking.booking_date} · {booking.session_type}
-          </div>
-          <div style={{ fontWeight: 800, fontSize: 18, color: '#0d1b2a', marginTop: 8 }}>
-            Rs. {booking.total_amount || 0}
-          </div>
-          {booking.nets_booked && Object.entries(booking.nets_booked).map(([net,slots]:any) => (
-            <div key={net} style={{fontSize:11,color:'#6b7280'}}>
-              🏏 {NET_NAMES[net]||net}: {Array.isArray(slots)?slots.join(', '):slots}
-            </div>
-          ))}
-          {msg && <div style={{ fontSize: 13, color: msg.startsWith('Done') ? '#16a34a' : '#dc2626',
-            marginTop: 8, fontWeight: 600 }}>{msg}</div>}
-          {booking.status === 'confirmed' && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-              {booking.payment_status !== 'paid' && (
-                <button onClick={() => action('/bookings/' + booking.booking_ref + '/paid', 'Mark Paid')}
-                  disabled={loading}
-                  style={{ flex: 1, padding: 11, borderRadius: 10, border: 'none',
-                    backgroundColor: '#16a34a', color: '#fff', fontWeight: 800,
-                    fontSize: 14, cursor: 'pointer' }}>
-                  Mark Paid
-                </button>
-              )}
-              <button onClick={() => action('/bookings/' + booking.booking_ref + '/cancel', 'Cancel')}
-                disabled={loading}
-                style={{ flex: 1, padding: 11, borderRadius: 10,
-                  border: '2px solid #dc2626', backgroundColor: '#fff',
-                  color: '#dc2626', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
-                Cancel
-              </button>
-            </div>
-          )}
-          <button onClick={()=>{setBooking(null);setRef('');setMsg('');}}
-            style={{width:'100%',padding:10,borderRadius:10,marginTop:10,
-              border:'1px solid #e0e0e0',backgroundColor:'#f8fafc',
-              color:'#6b7280',fontWeight:700,fontSize:13,cursor:'pointer'}}>
-            Close
-          </button>
-        </div>
-      )}
+      {booking && (<>
+        <BookingCard b={booking} canManage={canManage} highlight onAction={() => lookupRef(booking.booking_ref)}/>
+        <button onClick={()=>{setBooking(null);setRef('');}}
+          style={{width:'100%',padding:10,borderRadius:10,
+            border:'1px solid #e0e0e0',backgroundColor:'#f8fafc',
+            color:'#6b7280',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+          Clear
+        </button>
+      </>)}
     </div>
   );
 }
@@ -628,10 +528,10 @@ function VerifyTab() {
 type Tab = 'today' | 'bookings' | 'verify';
 
 export default function NetsStaffScreen() {
-  const navigate    = useNavigate();
   const { can }     = usePermissions();
-  const canView     = can('nets:view' as any);
-  const canManage   = can('nets:manage' as any);
+  const isAdmin     = (localStorage.getItem('user_role') || '').toLowerCase() === 'admin';
+  const canView     = isAdmin || can('nets:view' as any);
+  const canManage   = isAdmin || can('nets:manage' as any);
   const [tab, setTab] = useState<Tab>('today');
 
   if (!canView) {
@@ -656,8 +556,8 @@ export default function NetsStaffScreen() {
 
       <div style={{ padding: '0 16px' }}>
         {tab === 'today'    && <TodayTab canManage={canManage}/>}
-        {tab === 'bookings' && <BookingsTab/>}
-        {tab === 'verify'   && <VerifyTab/>}
+        {tab === 'bookings' && <BookingsTab canManage={canManage}/>}
+        {tab === 'verify'   && <VerifyTab canManage={canManage}/>}
       </div>
     </div>
   );

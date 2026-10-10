@@ -7,6 +7,8 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
 import ScreenHeader from '../shared/ScreenHeader';
+import { canBookNets } from './nets_book';
+import { localIso, fmtAmt, fmtDay, defaultSession, netApi, netMsg, isFree, shareBookingUrl, shareBooking } from './nets_util';
 
 const C = {
   navy:   '#0d1b2a',
@@ -64,14 +66,17 @@ function getMonthDays(year: number, month: number) {
 export default function NetsCalendarScreen() {
   const navigate    = useNavigate();
   const { can }     = usePermissions();
-  const canView     = can('nets:view' as any);
-  const canManage   = can('nets:manage' as any);
+  const isAdmin     = (localStorage.getItem('user_role') || '').toLowerCase() === 'admin';
+  const canView     = isAdmin || can('nets:view' as any);
+  const canManage   = isAdmin || can('nets:manage' as any);
+  const canBook     = canBookNets();
 
   const today       = new Date();
+  const todayIso    = localIso(today);
   const [year,  setYear]  = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
-  const [selDate, setSelDate] = useState(today.toISOString().slice(0,10));
-  const [session, setSession] = useState<'day'|'night'>('day');
+  const [selDate, setSelDate] = useState(todayIso);
+  const [session, setSession] = useState<'day'|'night'>(defaultSession());
   const [calData, setCalData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [selBooking, setSelBooking] = useState<any>(null);
@@ -107,15 +112,23 @@ export default function NetsCalendarScreen() {
   const prevMonth = () => { if(month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1); };
   const nextMonth = () => { if(month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1); };
 
-  const doAction = async (endpoint: string, label: string) => {
-    if (!confirm(label + '?')) return;
+  const doAction = async (endpoint: string, question: string, body: any = {}) => {
+    if (question && !confirm(question)) return;
     setActionMsg('');
-    try {
-      const r = await fetch(`${bld()}/api/data/nets${endpoint}`, { method:'POST', headers: hdr() });
-      const j = await r.json();
-      if (r.ok) { setActionMsg('✓ Done'); loadDay(selDate, session); setSelBooking(null); }
-      else setActionMsg(j.error || 'Error');
-    } catch { setActionMsg('Network error'); }
+    try { await netApi(endpoint, body); setActionMsg('✓ Done'); loadDay(selDate, session); setSelBooking(null); }
+    catch (e) { setActionMsg(netMsg(e)); }
+  };
+  // A booking whose day has passed: only settling what's owed (paid / expire) still applies
+  const selPast = !!selBooking && String(selBooking.booking_date || selDate).slice(0, 10) < todayIso;
+  const cancelBooking = (b: any) => {
+    const reason = window.prompt(`Cancel ${b.booking_ref}? The slots are released.\n\nReason (optional):`, '');
+    if (reason !== null) doAction(`/bookings/${b.booking_ref}/cancel`, '', { reason });
+  };
+  const selPaid = !!selBooking && (selBooking.payment_status === 'paid' || Number(selBooking.amount_paid || 0) > 0);
+  const canUndoPay = isAdmin || can('nets:admin' as any);
+  const undoPay = (b: any) => {
+    const reason = window.prompt(`Undo the ${fmtAmt(b.amount_paid || b.total_amount)} payment on ${b.booking_ref}?\nIt goes back to "payment pending" — then it can be collected again or cancelled.\n\nReason (required, e.g. refunded / marked by mistake):`, '');
+    if (reason !== null) doAction(`/bookings/${b.booking_ref}/unpay`, '', { reason });
   };
 
   const cells = getMonthDays(year, month);
@@ -188,7 +201,7 @@ export default function NetsCalendarScreen() {
       });
       const j = await r.json();
       if (r.ok) {
-        setActionMsg(`✓ Rescheduled to ${rsDate}. New total: Rs.${j.new_total}`);
+        setActionMsg(`✓ Moved to ${fmtDay(rsDate)}. New total: ${fmtAmt(j.new_total)}`);
         setShowReschedule(false); setSelBooking(null);
         loadDay(selDate, session);
       } else setRsPreview({error: j.error||'Error'});
@@ -249,7 +262,7 @@ export default function NetsCalendarScreen() {
             {cells.map((d,i) => {
               if (!d) return <div key={i}/>;
               const dt = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-              const isToday = dt === today.toISOString().slice(0,10);
+              const isToday = dt === todayIso;
               const isSel   = dt === selDate;
               return (
                 <button key={i} onClick={()=>selectDay(d)}
@@ -312,6 +325,10 @@ export default function NetsCalendarScreen() {
                         return (
                           <td key={h} style={{padding:'3px'}}>
                             <button onClick={()=>{
+                              if(!taken&&!blocked&&canBook){
+                                navigate(`/nets-book?date=${selDate}&session=${session}&net=${netId}&hour=${h}`);
+                                return;
+                              }
                               if(taken&&!blocked){
                                 // Find full booking from bookings_today list
                                 const full = (calData?.bookings_today||[]).find((b:any)=>b.booking_ref===cell?.booking_ref);
@@ -319,7 +336,7 @@ export default function NetsCalendarScreen() {
                               }
                             }}
                               style={{width:'100%',height:32,borderRadius:6,border:'none',
-                                backgroundColor:bg,cursor:taken&&!blocked?'pointer':'default',
+                                backgroundColor:bg,cursor:(taken||canBook)&&!blocked?'pointer':'default',
                                 display:'flex',alignItems:'center',justifyContent:'center'}}>
                               {taken && !blocked && (
                                 <span style={{width:8,height:8,borderRadius:'50%',
@@ -338,7 +355,7 @@ export default function NetsCalendarScreen() {
               {/* Legend */}
               <div style={{display:'flex',gap:12,marginTop:10,flexWrap:'wrap' as const}}>
                 {[
-                  {color:'#f0f2f5',label:'Open'},
+                  {color:'#f0f2f5',label:canBook?'Open — tap to book':'Open'},
                   {color:'#bbf7d0',label:'Paid'},
                   {color:'#fef08a',label:'Pay at venue'},
                   {color:'#fed7aa',label:'Maintenance'},
@@ -374,7 +391,7 @@ export default function NetsCalendarScreen() {
                   <div style={{fontSize:11,color:C.muted}}>{b.mobile}</div>
                 </div>
                 <div style={{textAlign:'right' as const}}>
-                  <div style={{fontWeight:800,fontSize:13,color:C.navy}}>Rs.{b.total_amount||0}</div>
+                  <div style={{fontWeight:800,fontSize:13,color:C.navy}}>{isFree(b) ? 'Free' : fmtAmt(b.total_amount)}</div>
                   <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:20,
                     backgroundColor:b.payment_status==='paid'?'#bbf7d0':'#fef08a',
                     color:b.payment_status==='paid'?'#16a34a':'#ca8a04'}}>
@@ -424,7 +441,7 @@ export default function NetsCalendarScreen() {
               <div style={{fontWeight:800,fontSize:15,color:'#111',marginBottom:2}}>{selBooking.member_name}</div>
               <div style={{fontSize:12,color:C.muted}}>📞 {selBooking.mobile||'—'}</div>
               <div style={{fontWeight:900,fontSize:22,color:C.navy,marginTop:8}}>
-                Rs.{selBooking.total_amount||selBooking.std_amount||selBooking.amount_due||0}
+                {isFree(selBooking) ? 'Free / pass' : fmtAmt(selBooking.total_amount)}
               </div>
             </div>
 
@@ -448,10 +465,17 @@ export default function NetsCalendarScreen() {
               </div>
             )}
 
+            {(selBooking.status==='confirmed'||!selBooking.status) && !selPast && shareBookingUrl(selBooking) && (
+              <button onClick={()=>shareBooking(selBooking)}
+                style={{width:'100%',padding:11,borderRadius:10,border:'none',marginBottom:8,
+                  backgroundColor:'#25d366',color:'#fff',fontWeight:800,fontSize:13,cursor:'pointer'}}>
+                💬 Share on WhatsApp
+              </button>
+            )}
             {canManage && (selBooking.status==='confirmed'||!selBooking.status) && (
               <div style={{display:'flex',flexDirection:'column' as const,gap:8}}>
-                {selBooking.payment_status!=='paid' && (
-                  <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/paid`,'Mark as Paid')}
+                {!isFree(selBooking) && selBooking.payment_status==='pending' && (
+                  <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/paid`,`Mark ${fmtAmt(selBooking.total_amount)} paid?`)}
                     style={{width:'100%',padding:13,borderRadius:10,border:'none',
                       background:'linear-gradient(135deg,#16a34a,#15803d)',
                       color:'#fff',fontWeight:800,fontSize:14,cursor:'pointer'}}>
@@ -459,18 +483,32 @@ export default function NetsCalendarScreen() {
                   </button>
                 )}
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-                  <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/expire`,'Expire this booking')}
-                    style={{padding:12,borderRadius:10,border:'1px solid #d97706',
-                      backgroundColor:'#fffbeb',color:'#d97706',fontWeight:700,fontSize:13,cursor:'pointer'}}>
-                    ⏱ Expire
-                  </button>
-                  <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/cancel`,'Cancel this booking')}
+                  {String(selBooking.booking_date||selDate).slice(0,10) === todayIso && (
+                    <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/no-show`,`${selBooking.member_name||'They'} didn't turn up? The net is released for walk-ins.`)}
+                      style={{padding:12,borderRadius:10,border:'1px solid #f59e0b',
+                        backgroundColor:'#fffbeb',color:'#b45309',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                      🚫 No-show
+                    </button>
+                  )}
+                  {!isFree(selBooking) && selBooking.payment_status==='pending' && String(selBooking.booking_date||selDate).slice(0,10) < todayIso && (
+                    <button onClick={()=>doAction(`/bookings/${selBooking.booking_ref}/expire`,'Expire this unpaid booking? Its slots are released.')}
+                      style={{padding:12,borderRadius:10,border:'1px solid #d97706',
+                        backgroundColor:'#fffbeb',color:'#d97706',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                      ⏱ Expire
+                    </button>
+                  )}
+                  {!selPast && selPaid && canUndoPay && <button onClick={()=>undoPay(selBooking)}
+                    style={{padding:12,borderRadius:10,border:'1px solid #9ca3af',
+                      backgroundColor:'#fff',color:'#6b7280',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+                    ↩ Undo payment
+                  </button>}
+                  {!selPast && !selPaid && <button onClick={()=>cancelBooking(selBooking)}
                     style={{padding:12,borderRadius:10,border:`2px solid ${C.red}`,
                       backgroundColor:'#fff',color:C.red,fontWeight:700,fontSize:13,cursor:'pointer'}}>
                     ✕ Cancel
-                  </button>
+                  </button>}
                 </div>
-                <button onClick={()=>{
+                {!selPast && !(selBooking.price_type==='pass'||selBooking.pass_id) && <button onClick={()=>{
                     setShowReschedule(true);
                     setRsSession(selBooking.session_type||'day');
                     setRsDate(''); setRsSel({}); setRsPreview(null); setRsCalData(null);
@@ -480,7 +518,7 @@ export default function NetsCalendarScreen() {
                     border:'1px solid #7c3aed',backgroundColor:'#f5f3ff',
                     color:'#7c3aed',fontWeight:700,fontSize:13,cursor:'pointer'}}>
                   🔄 Reschedule
-                </button>
+                </button>}
               </div>
             )}
 
@@ -538,7 +576,7 @@ export default function NetsCalendarScreen() {
               {/* Date picker */}
               <div style={{fontWeight:700,fontSize:11,color:C.muted,marginBottom:6,textTransform:'uppercase' as const}}>2. Select Date</div>
               <input type="date" value={rsDate}
-                min={new Date().toISOString().slice(0,10)}
+                min={todayIso}
                 onChange={e=>{setRsDate(e.target.value);setRsSel({});setRsPreview(null);if(e.target.value)loadRsDay(e.target.value,rsSession);}}
                 style={{width:'100%',padding:'10px',borderRadius:10,marginBottom:14,
                   border:`1px solid ${C.border}`,fontSize:14,outline:'none',
@@ -576,7 +614,8 @@ export default function NetsCalendarScreen() {
                               <td style={{padding:'3px 4px',fontSize:11,fontWeight:600}}>{netName}</td>
                               {(rsCalData.slots||[]).map((h:number)=>{
                                 const cell = rsCalData.slot_data?.[netId]?.[h];
-                                const taken = cell?.taken && !(rsSel[netId]||[]).includes(h);
+                                const own = cell?.booking_ref && cell.booking_ref === selBooking.booking_ref;
+                                const taken = cell?.taken && !own && !(rsSel[netId]||[]).includes(h);
                                 const blocked = cell?.blocked;
                                 const selected = (rsSel[netId]||[]).includes(h);
                                 const origCount = getOrigSlotCount(); const disabled = taken || blocked || (origCount>0 && totalSelSlots>=origCount&&!selected);
@@ -615,16 +654,16 @@ export default function NetsCalendarScreen() {
                         <div style={{backgroundColor:'#f5f3ff',borderRadius:10,padding:12,marginBottom:10}}>
                           <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
                             <span style={{color:C.muted}}>Original total</span>
-                            <span style={{fontWeight:700}}>Rs.{rsPreview.original_total}</span>
+                            <span style={{fontWeight:700}}>{fmtAmt(rsPreview.original_total)}</span>
                           </div>
                           <div style={{display:'flex',justifyContent:'space-between',fontSize:13,marginBottom:4}}>
                             <span style={{color:C.muted}}>New total</span>
-                            <span style={{fontWeight:800,color:C.navy}}>Rs.{rsPreview.new_total}</span>
+                            <span style={{fontWeight:800,color:C.navy}}>{fmtAmt(rsPreview.new_total)}</span>
                           </div>
                           {rsPreview.balance_due>0 && (
                             <div style={{display:'flex',justifyContent:'space-between',fontSize:13,color:C.red}}>
                               <span>Balance due</span>
-                              <span style={{fontWeight:800}}>Rs.{rsPreview.balance_due}</span>
+                              <span style={{fontWeight:800}}>{fmtAmt(rsPreview.balance_due)}</span>
                             </div>
                           )}
                           {rsPreview.new_total===rsPreview.original_total && (

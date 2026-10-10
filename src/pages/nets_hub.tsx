@@ -2,6 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
 import ScreenHeader from '../shared/ScreenHeader';
+import { canBookNets } from './nets_book';
 
 export default function NetsHubScreen() {
   const navigate = useNavigate();
@@ -10,8 +11,9 @@ export default function NetsHubScreen() {
   const tiles = [
     { icon:'🏏', label:'Net Dashboard',  sub:'Today, bookings & verify',       path:'/nets',          slug:'nets:view'  },
     { icon:'📅', label:'Net Calendar',   sub:'Monthly calendar & slot grid',   path:'/nets-calendar', slug:'nets:view'  },
+    { icon:'➕', label:'Book for someone', sub:'Member, academy user or walk-in', path:'/nets-book',  slug:'nets:book'  },
     { icon:'⚙️', label:'Nets Admin',     sub:'Members, pricing, hours & more', path:'/nets-admin',    slug:'nets:admin' },
-  ].filter(t => can(t.slug as any));
+  ].filter(t => t.slug === 'nets:book' ? canBookNets() : can(t.slug as any));
 
   return (
     <div style={{backgroundColor:'#f0f2f5',minHeight:'100vh',paddingBottom:80}}>

@@ -289,10 +289,14 @@ export default function MainMenu() {
     { Icon: IconBook,         label: 'Library',       sub: 'Coaching videos & resources',        path: 'library', slug: '' },
     { Icon: IconMail,         label: 'Contact Us',    sub: 'Enquiries, phone, WhatsApp, social', path: 'contact', slug: '' },
   ];
+  const isAdminRole = (localStorage.getItem('user_role') || '').toLowerCase() === 'admin';
   const UTILS_SLUGS = ['utils:students','utils:attendance','utils:payments','utils:report','utils:inactive'];
   const hasAnyUtils = !anon && permsLoaded && UTILS_SLUGS.some(s => canPerm(s));
   const tiles = anon ? PUBLIC_TILES : (permsLoaded
-    ? STUDENT_TILES.filter(t => t.path === 'utilities' ? hasAnyUtils : canPerm(t.slug))
+    ? STUDENT_TILES.filter(t => t.path === 'utilities' ? hasAnyUtils
+        // Net Booking also opens for roles that may only book for someone (nets:book)
+        : t.path === 'nets-hub' ? canPerm('nets:view') || canPerm('nets:book') || isAdminRole
+        : canPerm(t.slug))
     : STUDENT_TILES);
 
   const badge = ROLE_BADGE[role] ?? { Icon: IconEye, bg: 'rgba(255,255,255,0.2)', fg: '#fff' };

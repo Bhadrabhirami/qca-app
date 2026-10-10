@@ -57,6 +57,27 @@ function MembersTab() {
   const [editForm, setEditForm] = React.useState<any>(null);
   const [newPin,   setNewPin]   = React.useState('');
   const [saving,   setSaving]   = React.useState(false);
+  const [adding,   setAdding]   = React.useState(false);
+  const [addForm,  setAddForm]  = React.useState({ name:'', mobile:'', email:'', address:'', pin:'' });
+  const [addMsg,   setAddMsg]   = React.useState('');
+
+  const addMember = async () => {
+    setAddMsg('');
+    if (addForm.name.trim().length < 2) { setAddMsg("Enter the member's name"); return; }
+    if (addForm.mobile.replace(/\D/g,'').length < 10) { setAddMsg('Mobile needs 10 digits'); return; }
+    if (addForm.pin && !/^\d{4}$/.test(addForm.pin)) { setAddMsg('PIN must be 4 digits (or leave it empty)'); return; }
+    setSaving(true);
+    try {
+      const r = await fetch(`${base}/api/data/nets/members`, { method:'POST', headers: hdr(), body: JSON.stringify(addForm) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setAddMsg(`✓ ${j.data?.name} added as ${j.data?.member_code}${j.pin ? ` — PIN ${j.pin} (tell the member now, it isn't shown again)` : ''}`);
+        setAddForm({ name:'', mobile:'', email:'', address:'', pin:'' });
+        load(search);
+      } else setAddMsg(j.error || 'Could not add the member');
+    } catch { setAddMsg('Network error'); }
+    finally { setSaving(false); }
+  };
 
   const load = React.useCallback(async (q = '') => {
     setLoading(true);
@@ -82,8 +103,9 @@ function MembersTab() {
       const r = await fetch(`${base}/api/data/nets/members/${selected.id}/edit`, {
         method: 'POST', headers: hdr(), body: JSON.stringify(editForm)
       });
+      const j = await r.json().catch(() => ({}));
       if (r.ok) { setMsg('✓ Details saved'); load(search); setSelected({...selected,...editForm}); }
-      else setMsg('Error saving');
+      else setMsg(j.error || 'Could not save');
     } catch { setMsg('Network error'); }
     finally { setSaving(false); }
   };
@@ -113,9 +135,10 @@ function MembersTab() {
       if (r.ok) {
         const updated = {...selected, is_active: !selected.is_active};
         setSelected(updated);
+        setMsg(`✓ ${updated.is_active ? 'Restored — they can book again' : 'Suspended — they can no longer book'}`);
         load(search);
-      }
-    } catch {} finally { setSaving(false); }
+      } else { const j = await r.json().catch(() => ({})); setMsg(j.error || 'Could not change the status'); }
+    } catch { setMsg('Network error'); } finally { setSaving(false); }
   };
 
   // Member detail sheet
@@ -203,12 +226,49 @@ function MembersTab() {
           {saving?'Setting PIN...':'Set PIN'}
         </button>
       </div>
+
+      {/* Suspend / restore */}
+      <div style={{backgroundColor:C.card,borderRadius:12,padding:14,marginTop:12,border:`1px solid ${C.border}`}}>
+        <div style={{fontWeight:800,fontSize:12,color:C.navy,marginBottom:6,textTransform:'uppercase' as const,letterSpacing:'0.5px'}}>
+          {selected.is_active ? '⛔ Suspend member' : '✅ Restore member'}</div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+          {selected.is_active ? 'A suspended member cannot log in or be booked for. Existing bookings stay.' : 'This member is suspended. Restore to let them book again.'}
+        </div>
+        <button onClick={toggleActive} disabled={saving}
+          style={{width:'100%',padding:11,borderRadius:10,cursor:'pointer',fontWeight:800,fontSize:14,
+            border:`1px solid ${selected.is_active?C.red:'#16a34a'}`,backgroundColor:'#fff',color:selected.is_active?C.red:'#16a34a'}}>
+          {selected.is_active ? 'Suspend' : 'Restore'}
+        </button>
+      </div>
     </div>
   );
 
   // Members list
+  const inp: React.CSSProperties = {width:'100%',padding:'8px 10px',borderRadius:8,border:`1px solid ${C.border}`,fontSize:13,outline:'none',boxSizing:'border-box' as const,marginBottom:6};
   return (
     <div style={{padding:'12px 0'}}>
+      <div style={{backgroundColor:C.card,borderRadius:12,padding:adding?14:0,marginBottom:12,border:adding?`1px solid ${C.border}`:'none'}}>
+        {!adding ? (
+          <button onClick={()=>{setAdding(true);setAddMsg('');}}
+            style={{width:'100%',padding:11,borderRadius:10,border:`1px dashed ${C.navy}`,backgroundColor:'#fff',
+              color:C.navy,fontWeight:800,fontSize:13,cursor:'pointer'}}>➕ Add net member</button>
+        ) : (<>
+          <div style={{fontWeight:800,fontSize:12,color:C.navy,marginBottom:8,textTransform:'uppercase' as const}}>➕ New net member</div>
+          <input value={addForm.name} onChange={e=>setAddForm(f=>({...f,name:e.target.value}))} placeholder="Name *" aria-label="Name" style={inp}/>
+          <input value={addForm.mobile} onChange={e=>setAddForm(f=>({...f,mobile:e.target.value}))} type="tel" inputMode="tel" placeholder="Mobile * (their login)" aria-label="Mobile" style={inp}/>
+          <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} type="email" placeholder="Email (optional)" aria-label="Email" style={inp}/>
+          <input value={addForm.address} onChange={e=>setAddForm(f=>({...f,address:e.target.value}))} placeholder="Address (optional)" aria-label="Address" style={inp}/>
+          <input value={addForm.pin} onChange={e=>setAddForm(f=>({...f,pin:e.target.value.replace(/\D/g,'').slice(0,4)}))} inputMode="numeric"
+            placeholder="4-digit PIN (leave empty to generate one)" aria-label="PIN" style={inp}/>
+          {addMsg && <div style={{fontSize:12,fontWeight:700,color:addMsg.startsWith('✓')?'#16a34a':C.red,margin:'4px 0 8px'}}>{addMsg}</div>}
+          <div style={{display:'flex',gap:8}}>
+            <button onClick={()=>{setAdding(false);setAddMsg('');}} style={{flex:1,padding:10,borderRadius:8,border:`1px solid ${C.border}`,
+              backgroundColor:'#fff',color:C.muted,fontWeight:700,fontSize:13,cursor:'pointer'}}>Close</button>
+            <button onClick={addMember} disabled={saving} style={{flex:2,padding:10,borderRadius:8,border:'none',
+              backgroundColor:C.navy,color:'#fff',fontWeight:800,fontSize:13,cursor:'pointer'}}>{saving?'Adding…':'Add member'}</button>
+          </div>
+        </>)}
+      </div>
       <div style={{display:'flex',gap:8,marginBottom:12}}>
         <input value={search} onChange={e=>setSearch(e.target.value)}
           onKeyDown={e=>e.key==='Enter'&&load(search)}
