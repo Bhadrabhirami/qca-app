@@ -35,7 +35,11 @@ import ScreenHeader from '../shared/ScreenHeader';
 import { NAV_CLEARANCE } from '../shared/BottomNav';
 import { usePullToRefresh } from './usePullToRefresh';
 import { syncPaymentsOnly, syncStudentsOnly, refreshDuesNow } from './useSyncService';
+
 import { getPaymentsMaxId, deleteLocalPaymentByReceipt } from '../database/db';
+
+/** Fee types offered when recording a student payment: Monthly Tuition Fee and Admission Fee */
+const STUDENT_FEE_IDS = [1, 2];
 
 const C = {
   green:  '#1a472a', gold:   '#d4af37', bg:     '#f4f7f6',
@@ -1174,7 +1178,8 @@ function AddPaymentModal({ onClose, onSuccess }: {
       .catch(()=>{});
     // Real income categories (ids must match the server's account_categories).
     // Synced local copy first so the picker works offline, then refresh.
-    const income = (rows:any[]) => rows.filter((c:any)=>c.txn_type==='INCOME');
+    // Student payments are tuition or admission only (other income goes through Finance)
+    const income = (rows:any[]) => rows.filter((c:any)=>c.txn_type==='INCOME' && STUDENT_FEE_IDS.includes(Number(c.id)));
     getFeeCategories().then(rows=>{ if (rows.length) setCategories(income(rows)); }).catch(()=>{});
     fetch(`${base}/api/data/fee-categories`,{headers:hdrs()})
       .then(r=>r.ok?r.json():{data:[]})
@@ -1498,8 +1503,8 @@ function AddPaymentModal({ onClose, onSuccess }: {
                 boxShadow:'0 8px 24px rgba(0,0,0,0.12)',
                 border:'1px solid #e5e7eb',marginTop:4}}>
                 {(filteredCats.length>0 || catSearch ? filteredCats : [
-                  // Offline and never synced: only the id verified against the server
-                  {id:1,name:'Monthly Tuition Fee'},
+                  // Offline and never synced: the two student fee types
+                  {id:1,name:'Monthly Tuition Fee'},{id:2,name:'Admission Fee'},
                 ]).map(c=>(
                   <div key={c.id}
                     onMouseDown={()=>selectCategory(c)}
