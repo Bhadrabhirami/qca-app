@@ -19,6 +19,7 @@
  */
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
+import { confirmLeave } from './backNav';
 
 export const HEADER_GREEN = '#1a472a';
 
@@ -44,7 +45,8 @@ export default function ScreenHeader({
   background = HEADER_GREEN,
 }: ScreenHeaderProps) {
   const navigate = useNavigate();
-  const onBack = typeof back === 'function' ? back : () => navigate(-1);
+  // Ask about unsaved changes before leaving (see shared/backNav)
+  const onBack = async () => { if (!(await confirmLeave())) return; typeof back === 'function' ? back() : navigate(-1); };
 
   return (
     <header style={{

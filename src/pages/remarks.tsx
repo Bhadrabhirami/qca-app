@@ -5,6 +5,7 @@ import { getAllStudents, getAttendanceForStudentLast7Days } from '../database/db
 import { usePermissions, isDataRestricted, getLinkedStudentIds } from './usePermissions';
 import { useNavigate } from 'react-router-dom';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import { useUnsavedChanges } from '../shared/backNav';
 
 // Fetch with timeout — prevents hanging requests
 const fetchT = (url: string, opts: RequestInit = {}, ms = 10000): Promise<Response> => {
@@ -173,6 +174,8 @@ export default function RemarksScreen() {
   const [editingId,   setEditingId]   = useState<number|null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number|null>(null);
   const [saving, setSaving] = useState(false);
+  useUnsavedChanges(tab === 'add' && !saving && (!!remarkText.trim() || !!videoUrl.trim()),
+    { message: editingId ? 'Changes to this remark are not saved.' : 'This remark has not been saved yet.' });
   // Feed pagination
   const PAGE_SIZE = 15;
   const [feedPage,    setFeedPage]    = useState(1);

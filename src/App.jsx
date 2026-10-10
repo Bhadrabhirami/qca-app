@@ -57,6 +57,7 @@ import EditProfileScreen from './pages/editprofile';
 import FinanceScreen    from './pages/finance';
 import VoidPaymentsScreen from './pages/VoidPayments';
 import CoachRosterScreen  from './pages/CoachRoster';
+import CoachRosterWhatsApp from './pages/CoachRosterWhatsApp';
 import NetsHubScreen    from './pages/nets_hub';
 import NetsStaffScreen   from './pages/nets_staff';
 import NetsAdminScreen   from './pages/nets_admin';
@@ -605,6 +606,7 @@ export default function App() {
           <Route path="/finance"    element={<PermRoute slug="payments:record"><FinanceScreen /></PermRoute>} />
                 <Route path="/void-payments" element={<PermRoute slug="payments:void"><VoidPaymentsScreen /></PermRoute>} />
                 <Route path="/coach-roster" element={<CoachRosterScreen />} />
+                <Route path="/coach-roster-whatsapp" element={<CoachRosterWhatsApp />} />
           {/* Hub also opens for roles that can only book for someone (nets:book) */}
           <Route path="/nets-hub"   element={canBookNets() ? <NetsHubScreen /> : <PermRoute slug="nets:view"><NetsHubScreen /></PermRoute>} />
           <Route path="/nets"       element={<PermRoute slug="nets:view"><NetsStaffScreen /></PermRoute>} />

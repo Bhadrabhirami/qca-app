@@ -320,7 +320,7 @@ export function KpiDashboard() {
   const k = data?.kpis;
   const vs = data?.prev_label || 'prev';
   const fees = data?.can_fees !== false;
-  const feeParts = ['paid','partial','unpaid','overdue','member'].map(key => ({ key, label: FEE_LABEL[key], value: data?.fee_split?.[key] || 0, color: FEE_COLOR[key] }));
+  const feeParts = ['paid','unpaid','overdue','member'].map(key => ({ key, label: FEE_LABEL[key], value: data?.fee_split?.[key] || 0, color: FEE_COLOR[key] }));
 
   const ActionList = ({ title, idsList, empty, filter, withWa }: { title:string; idsList:number[]; empty:string; filter:string; withWa?:boolean }) => (<>
     <SectionLabel action={idsList.length > 4 ? `All ${idsList.length}` : undefined} onAction={() => list(filter)}>{title} · {idsList.length}</SectionLabel>
@@ -477,7 +477,7 @@ export function KpiList() {
           </div>
           {data?.can_fees !== false && <div style={{ display:'flex', gap:5, overflowX:'auto', scrollbarWidth:'none' }}>
             <Chip on={!f.fee} onClick={() => set('fee','')}>Any fee status</Chip>
-            {['overdue','partial','unpaid','paid','member'].map(k => <Chip key={k} on={f.fee===k} color={FEE_COLOR[k]} onClick={() => set('fee', f.fee===k?'':k)}>{FEE_LABEL[k]}</Chip>)}
+            {['overdue','unpaid','paid','member'].map(k => <Chip key={k} on={f.fee===k} color={FEE_COLOR[k]} onClick={() => set('fee', f.fee===k?'':k)}>{FEE_LABEL[k]}</Chip>)}
           </div>}
           <div style={{ display:'flex', gap:5, overflowX:'auto', scrollbarWidth:'none' }}>
             <Chip on={!f.att} onClick={() => set('att','')}>Any attendance</Chip>
@@ -640,15 +640,16 @@ export function KpiStudent() {
                   <th style={th}>Paid</th><th style={{ ...th, paddingRight:12 }}>Paid on</th>
                 </tr></thead>
                 <tbody>{fee.month_rows.map((mm:any) => {
-                  const settled = mm.status === 'paid' || mm.status === 'written off';
+                  const settled = mm.status === 'paid' || mm.status === 'written off' || mm.status === 'waived';
                   const col = settled ? C.good : mm.overdue ? C.bad : mm.status === 'partial' ? C.warn : C.muted;
-                  const label = mm.status === 'written off' ? 'Written off' : settled ? 'Paid'
+                  const label = mm.status === 'written off' ? 'Written off' : mm.status === 'waived' ? 'Waived' : settled ? 'Paid'
                     : mm.overdue ? `Overdue ${mm.days_overdue}d` : mm.status === 'partial' ? 'Partial' : `Due ${Number(mm.due_date.slice(8))} ${monthLabel(mm.month, false)}`;
                   return (
                     <tr key={mm.month} style={{ borderTop:`1px solid ${C.border}`, backgroundColor: mm.overdue ? '#fef2f2' : undefined }}>
                       <td style={{ ...td, textAlign:'left', paddingLeft:12, fontWeight:700 }}>{monthLabel(mm.month, false)} {mm.month.slice(2,4)}</td>
                       <td style={{ ...td, textAlign:'left', fontWeight:800, color:col }}>{label}</td>
-                      <td style={td}>{fmtAmt(mm.paid)}{!settled && <span style={{ color:C.muted }}> / {fmtAmt(mm.due)}</span>}</td>
+                      <td style={td}>{fmtAmt(mm.paid)}{(!settled || mm.reduced) && <span style={{ color:C.muted }}> / {fmtAmt(mm.due)}</span>}
+                        {mm.reduced && <div style={{ fontSize:10, color:C.warn, fontWeight:700 }}>reduced</div>}</td>
                       <td style={{ ...td, paddingRight:12, color:C.muted }}>
                         {mm.paid_on ? new Date(mm.paid_on+'T00:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'}) : '—'}{mm.mode ? ` · ${mm.mode}` : ''}
                       </td>

@@ -5,6 +5,7 @@ import {
   deleteTempStudent, syncAllStudents, TempStudent,
 } from '../database/db';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import { useUnsavedChanges } from '../shared/backNav';
 
 const C = {
   navy:'#001f3f', gold:'#c5a059', green:'#1a472a', red:'#dc2626',
@@ -294,6 +295,13 @@ export default function AddStudentScreen() {
     return a>=0?`${a} yrs`:'';
   };
 
+  // Leaving with a half-filled student asks Save / Discard / Keep editing
+  const addedOk = React.useRef(false);
+  useUnsavedChanges(tab === 'add' && !saving && (!!name.trim() || !!dob), {
+    message: 'The new student has not been saved yet.',
+    onSave: async () => { addedOk.current = false; await handleAdd(); return addedOk.current; },
+  });
+
   const handleAdd = async () => {
     if (!name.trim())  { showToast('⚠ Name is required','error'); return; }
     if (!dob)          { showToast('⚠ Date of Birth is required','error'); return; }
@@ -333,6 +341,7 @@ export default function AddStudentScreen() {
       showToast(`✔ ${name.trim()} registered (ID ${serverId}) and saved locally.`, 'success');
       setName(''); setDob(''); setStatus('Active'); setCategory('REGULAR');
       setEnrollDate(today);
+      addedOk.current = true;
     } catch(e:any) {
       showToast(`⚠ ${e.message || 'Network error - check connection'}`, 'error');
     }

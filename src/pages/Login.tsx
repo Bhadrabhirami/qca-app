@@ -9,6 +9,7 @@ import { BiometricAuth, BiometryError } from '@aparajita/capacitor-biometric-aut
 import { saveUserContext } from './usePermissions';
 import LoginLanding from './LoginLanding';
 import { getLastUsername, setLastUsername, canRememberPassword, savePassword, loadSavedLogin, hasSavedLogin, forgetPassword } from './savedLogin';
+import { useBackHandler } from '../shared/backNav';
 
 const C = {
   navy:'#0d1b2a', navyL:'#1a2f4a', green:'#1a472a',
@@ -107,6 +108,12 @@ export default function LoginPage({ onSuccess }: { onSuccess:(user:any,token:str
     const toForm = sessionStorage.getItem('qca_login_form') === '1';   // set by the lock screen
     sessionStorage.removeItem('qca_login_form');
     return !toForm;
+  });
+  // Android back: forgot / OTP / reset → sign-in form → slides; on the slides it asks to exit
+  useBackHandler(() => {
+    if (screen !== 'login') { setScreen('login'); setError(''); return true; }
+    if (!landing) { setLanding(true); setError(''); return true; }
+    return false;
   });
   const [fpEmail,  setFpEmail]  = useState('');
   const [otp,      setOtp]      = useState('');

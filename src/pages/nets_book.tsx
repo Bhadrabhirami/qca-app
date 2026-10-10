@@ -18,6 +18,7 @@ import ScreenHeader from '../shared/ScreenHeader';
 import { apiAuthHeaders } from './apiHeaders';
 import { can } from './usePermissions';
 import { localIso, defaultSession } from './nets_util';
+import { useUnsavedChanges } from '../shared/backNav';
 
 const C = { navy:'#0d1b2a', green:'#1a472a', gold:'#d4af37', bg:'#f0f2f5', border:'#e5e7eb', muted:'#6b7280', text:'#111827',
   good:'#16a34a', bad:'#dc2626', warn:'#d97706' };
@@ -89,6 +90,9 @@ export default function NetsBookScreen() {
   const [err, setErr] = useState('');
   const [done, setDone] = useState<any>(null);
   const [paid, setPaid] = useState(false);
+  // half-made booking (person or slots chosen, not yet booked): ask before leaving
+  useUnsavedChanges(!done && !busy && (!!who || (isNew && !!nw.name.trim()) || Object.values(sel).some(h => h.length > 0)),
+    { message: 'This booking has not been made yet.' });
 
   // search people (debounced)
   useEffect(() => {

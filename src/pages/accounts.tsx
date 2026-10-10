@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ScreenHeader, { HeaderIconButton } from '../shared/ScreenHeader';
 import { apiAuthHeaders } from './apiHeaders';
 import { fmtRegNo } from './studentUtils';
+import { useUnsavedChanges, confirmLeave } from '../shared/backNav';
 
 const C = { green:'#1a472a', gold:'#d4af37', bg:'#f4f7f6', border:'#e8e8e8', muted:'#6b7280', text:'#1f2937', good:'#16a34a', bad:'#dc2626' };
 const CARD: React.CSSProperties = { backgroundColor:'#fff', borderRadius:12, border:`1px solid ${C.border}`, overflow:'hidden' };
@@ -95,22 +96,27 @@ function AccountSheet({ acc, types, ready, onClose, onSaved }: { acc:any; types:
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const links = telLinks(d.phone);
-  const save = () => {
+  const save = (): Promise<boolean> => {
     setMsg('');
-    if (name.trim().length < 2) { setMsg('Enter the name or business'); return; }
+    if (name.trim().length < 2) { setMsg('Enter the name or business'); return Promise.resolve(false); }
     setBusy(true);
-    api(`/${acc.id}/update`, { name: name.trim(), account_type: type, ...d })
-      .then(r => onSaved(r.warning ? `✓ Saved — ${r.warning}` : `✓ ${name.trim()} saved`))
-      .catch(e => setMsg(netMsg(e))).finally(() => setBusy(false));
+    return api(`/${acc.id}/update`, { name: name.trim(), account_type: type, ...d })
+      .then(r => { onSaved(r.warning ? `✓ Saved — ${r.warning}` : `✓ ${name.trim()} saved`); return true; })
+      .catch(e => { setMsg(netMsg(e)); return false; }).finally(() => setBusy(false));
   };
+  // Changed but not saved: back / ✕ / tap outside asks Save / Discard / Keep editing
+  const orig = React.useRef(JSON.stringify([acc.outside_name || acc.display_name || '', acc.account_type, pick(acc)]));
+  const dirty = !busy && JSON.stringify([name, type, d]) !== orig.current;
+  useUnsavedChanges(dirty, { message: `Changes to ${acc.display_name} are not saved.`, onSave: save });
+  const close = async () => { if (await confirmLeave()) onClose(); };
   return (
-    <div role="dialog" aria-label={`Edit ${acc.display_name}`} onClick={onClose}
+    <div role="dialog" aria-label={`Edit ${acc.display_name}`} onClick={close}
       style={{ position:'fixed', inset:0, zIndex:60, backgroundColor:'rgba(0,0,0,0.45)', display:'flex', alignItems:'flex-end' }}>
       <div onClick={e => e.stopPropagation()} style={{ width:'100%', maxHeight:'92vh', overflowY:'auto', backgroundColor:'#fff', borderRadius:'18px 18px 0 0',
         padding:'14px 14px calc(env(safe-area-inset-bottom, 0px) + 14px)', display:'flex', flexDirection:'column', gap:9 }}>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           <div style={{ flex:1, fontWeight:900, fontSize:16 }}>{acc.display_name}</div>
-          <button onClick={onClose} aria-label="Close" style={{ background:'none', border:'none', fontSize:20, color:C.muted, cursor:'pointer' }}>✕</button>
+          <button onClick={close} aria-label="Close" style={{ background:'none', border:'none', fontSize:20, color:C.muted, cursor:'pointer' }}>✕</button>
         </div>
         {links && (
           <div style={{ display:'flex', gap:8 }}>
@@ -151,6 +157,8 @@ export default function AccountsScreen() {
   const [type, setType] = useState('Vendor');
   const [formErr, setFormErr] = useState('');
   const [details, setDetails] = useState<Details>(EMPTY);
+  useUnsavedChanges(!!name.trim() || Object.values(details).some(v => String(v).trim()),
+    { message: 'The new outside account has not been created yet.' });
   const [moreOpen, setMoreOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
 

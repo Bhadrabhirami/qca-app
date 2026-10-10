@@ -8,6 +8,7 @@ import { Share } from '@capacitor/share';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import { useUnsavedChanges } from '../shared/backNav';
 
 const C = {
   navy:'#0d1b2a', green:'#1a472a', gold:'#c5a059',
@@ -72,6 +73,8 @@ export default function FinanceScreen() {
   const [status,setStatus]=useState('Paid');
   const [saving,setSaving]=useState(false);
   const [msg,setMsg]=useState('');
+  useUnsavedChanges(tab==='entry' && !saving && (!!selectedCat || !!selectedAcc || !!amount || !!remarks.trim()),
+    { message:'This entry has not been saved yet.' });
 
   // ── History ──
   const [hMonth,setHMonth]=useState(new Date().toISOString().slice(0,7));

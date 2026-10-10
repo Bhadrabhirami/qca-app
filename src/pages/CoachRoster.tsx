@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import ScreenHeader, { HeaderIconButton } from '../shared/ScreenHeader';
+import { useNavigate } from 'react-router-dom';
 
 const C = { green:'#1a472a', gold:'#d4af37', bg:'#f4f7f6', border:'#e8e8e8', muted:'#6b7280', text:'#1f2937',
   morn:'#d97706', mornBg:'#fffbeb', eve:'#4f46e5', eveBg:'#eef2ff' };
@@ -112,6 +113,8 @@ function DayModal({ date, slots, onClose }: { date:string; slots:{morning:any[];
 }
 
 export default function CoachRosterScreen() {
+  const navigate = useNavigate();
+  const isAdminUser = (localStorage.getItem('user_role') || '').toLowerCase() === 'admin';
   const today = new Date();
   const todayKey = keyOf(today);
   const [year,  setYear]  = useState(today.getFullYear());
@@ -182,6 +185,9 @@ export default function CoachRosterScreen() {
               style={{ background:'rgba(255,255,255,0.14)', border:'none', color:C.gold, fontSize:11.5, fontWeight:800, height:28, padding:'0 10px', borderRadius:8, cursor:'pointer' }}>
               Today
             </button>
+          )}
+          {isAdminUser && (
+            <HeaderIconButton label="WhatsApp roster" onClick={() => navigate('/coach-roster-whatsapp')}><span style={{ fontSize:17, lineHeight:1 }}>💬</span></HeaderIconButton>
           )}
           <HeaderIconButton label="Previous month" onClick={prevMonth}><span style={{ fontSize:24, lineHeight:1 }}>‹</span></HeaderIconButton>
           <HeaderIconButton label="Next month" onClick={nextMonth}><span style={{ fontSize:24, lineHeight:1 }}>›</span></HeaderIconButton>

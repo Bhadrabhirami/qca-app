@@ -5,6 +5,7 @@ import { fmtRegNo } from './studentUtils';
 import { usePermissions, getLinkedStudentIds } from './usePermissions';
 import StudentPhoto from '../shared/StudentPhoto';
 import ScreenHeader from '../shared/ScreenHeader';
+import { useUnsavedChanges } from '../shared/backNav';
 
 // ── Constants — exact match with edit_student.html ────────────────────────────
 const ISD_FLAGS: Record<string,string> = { '+91':'🇮🇳', '+971':'🇦🇪', '+44':'🇬🇧', '+1':'🇺🇸' };
@@ -537,7 +538,9 @@ export default function EditProfileScreen() {
   }, [studentId, base]);
 
   // ── Save ──────────────────────────────────────────────────────────────────
+  const savedOk = React.useRef(false);
   const save = useCallback(async () => {
+    savedOk.current = false;
     // Check permission — student:edit:any for any, student:edit:own for own profile only
     const editingOwnProfile = linkedIds.includes(Number(studentId));
     const canEditThis = can('student:edit:any') || (can('student:edit:own') && editingOwnProfile) || can('student:edit');
@@ -690,6 +693,7 @@ export default function EditProfileScreen() {
 
         // ── Mark form clean ────────────────────────────────────────────────
         setOrigForm({...form});
+        savedOk.current = true;
         showToast(`✔ Profile saved — ${j.updated?.length || 0} field(s) updated`, 'success');
       }
     } catch (e: any) {
@@ -697,6 +701,11 @@ export default function EditProfileScreen() {
     }
     setSaving(false);
   }, [form, isDirty, studentId, base]);
+  // Leaving with unsaved edits asks Save / Discard / Keep editing
+  useUnsavedChanges(isDirty && !saving, {
+    message: 'This student profile has unsaved changes.',
+    onSave: async () => { await save(); return savedOk.current; },
+  });
 
   // ── Render ────────────────────────────────────────────────────────────────
   // Connection error screen

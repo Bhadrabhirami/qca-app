@@ -5,6 +5,7 @@ import {
 } from '@tabler/icons-react';
 import { usePermissions } from '../pages/usePermissions';
 import { getPaymentOverview, getPendingUploadCount } from '../database/db';
+import { confirmLeave } from './backNav';
 
 const C = { green: '#1a472a', red: '#c0392b', muted: '#9ca3af' };
 
@@ -92,7 +93,7 @@ export default function BottomNav() {
       {tabs.map(t => (
         <button
           key={t.key}
-          onClick={() => navigate(t.path)}
+          onClick={async () => { if (await confirmLeave()) navigate(t.path); }}
           aria-label={t.label}
           aria-current={t.active ? 'page' : undefined}
           style={{

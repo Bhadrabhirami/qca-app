@@ -37,6 +37,7 @@ import { usePullToRefresh } from './usePullToRefresh';
 import { syncPaymentsOnly, syncStudentsOnly, refreshDuesNow } from './useSyncService';
 
 import { getPaymentsMaxId, deleteLocalPaymentByReceipt } from '../database/db';
+import { useUnsavedChanges, confirmLeave } from '../shared/backNav';
 
 /** Fee types offered when recording a student payment: Monthly Tuition Fee and Admission Fee */
 const STUDENT_FEE_IDS = [1, 2];
@@ -1149,7 +1150,7 @@ function AddPaymentModal({ onClose, onSuccess }: {
     amount:       '',
     direction:    'IN',
     mode:         'Cash',
-    payment_date: new Date().toISOString().slice(0,10),
+    payment_date: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })(),
     billing_month:'',
     note:         '',
   });
@@ -1160,6 +1161,10 @@ function AddPaymentModal({ onClose, onSuccess }: {
   const [lastPayment,setLastPayment]= useState<any|null>(null);
   const [waSending,  setWASending]  = useState(false);
   const [waResult,   setWAResult]   = useState('');
+  // A half-entered payment asks Discard / Keep editing before the popup closes (back, ✕ or tap outside)
+  const paymentDirty = !lastPayment && !saving && (!!selected || !!selectedCat || !!form.amount || !!form.note.trim());
+  useUnsavedChanges(paymentDirty, { message: 'This payment has not been recorded yet.' });
+  const guardedClose = async () => { if (await confirmLeave()) onClose(); };
 
   // Generate last 12 months
   const monthOpts = Array.from({length:12},(_,i)=>{
@@ -1328,7 +1333,7 @@ function AddPaymentModal({ onClose, onSuccess }: {
   return (
     <div style={{position:'fixed',inset:0,zIndex:3000,
       backgroundColor:'rgba(0,0,0,0.55)',display:'flex',alignItems:'flex-end'}}
-      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+      onClick={e=>{if(e.target===e.currentTarget)guardedClose();}}>
       <div style={{backgroundColor:'#f0f4f1',width:'100%',
         borderRadius:'22px 22px 0 0',maxHeight:'92vh',
         overflowY:'auto',paddingBottom:40}}>
@@ -1349,7 +1354,7 @@ function AddPaymentModal({ onClose, onSuccess }: {
               Fields marked <span style={{color:'#dc2626',fontWeight:800}}>*</span> are required
             </div>
           </div>
-          <button onClick={onClose} style={{background:'rgba(0,0,0,0.06)',
+          <button onClick={guardedClose} aria-label="Close" style={{background:'rgba(0,0,0,0.06)',
             border:'none',width:32,height:32,borderRadius:'50%',
             fontSize:16,cursor:'pointer',color:'#6b7280',
             display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>

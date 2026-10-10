@@ -13,6 +13,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from './usePermissions';
 import ScreenHeader, { HeaderTabs } from '../shared/ScreenHeader';
+import { useBackHandler, useUnsavedChanges, confirmLeave } from '../shared/backNav';
 
 const C = {
   navy:   '#0d1b2a',
@@ -141,10 +142,18 @@ function MembersTab() {
     } catch { setMsg('Network error'); } finally { setSaving(false); }
   };
 
+  // Unsaved edits / a half-filled new member: ask before leaving. Back on a member returns to the list.
+  const editDirty = !!selected && !!editForm && !saving &&
+    ['name','mobile','email','address'].some(k => (editForm[k] || '') !== (selected[k] || ''));
+  useUnsavedChanges(editDirty, { message: `Changes to ${selected?.name || 'this member'} are not saved.` });
+  useUnsavedChanges(adding && !saving && Object.values(addForm).some(v => v.trim()), { message: 'The new member has not been added yet.' });
+  const backToList = async () => { if (await confirmLeave()) setSelected(null); };
+  useBackHandler(() => { backToList(); return true; }, !!selected);
+
   // Member detail sheet
   if (selected) return (
     <div style={{padding:'12px 0'}}>
-      <button onClick={()=>setSelected(null)}
+      <button onClick={backToList}
         style={{background:'none',border:'none',color:C.navy,fontWeight:700,
           fontSize:14,cursor:'pointer',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
         ← Back to Members
@@ -262,7 +271,7 @@ function MembersTab() {
             placeholder="4-digit PIN (leave empty to generate one)" aria-label="PIN" style={inp}/>
           {addMsg && <div style={{fontSize:12,fontWeight:700,color:addMsg.startsWith('✓')?'#16a34a':C.red,margin:'4px 0 8px'}}>{addMsg}</div>}
           <div style={{display:'flex',gap:8}}>
-            <button onClick={()=>{setAdding(false);setAddMsg('');}} style={{flex:1,padding:10,borderRadius:8,border:`1px solid ${C.border}`,
+            <button onClick={async()=>{ if (await confirmLeave()) { setAdding(false);setAddMsg('');setAddForm({ name:'', mobile:'', email:'', address:'', pin:'' }); } }} style={{flex:1,padding:10,borderRadius:8,border:`1px solid ${C.border}`,
               backgroundColor:'#fff',color:C.muted,fontWeight:700,fontSize:13,cursor:'pointer'}}>Close</button>
             <button onClick={addMember} disabled={saving} style={{flex:2,padding:10,borderRadius:8,border:'none',
               backgroundColor:C.navy,color:'#fff',fontWeight:800,fontSize:13,cursor:'pointer'}}>{saving?'Adding…':'Add member'}</button>

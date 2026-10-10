@@ -4,6 +4,7 @@ import App from './App';
 import './index.css';
 import { initDatabase } from './database/db';
 import AppLock from './pages/AppLock';
+import { installBackButton, LeaveDialogHost } from './shared/backNav';
 
 // ── Splash screen shown while DB initialises ──────────────────────────────────
 // This replaces the blue Android splash screen immediately so the user sees
@@ -61,7 +62,7 @@ function BootSplash({ onReady }: { onReady: () => void }) {
   }, [onReady]);
 
   return (
-    <div style={{
+    <div data-back-root data-back-exit style={{
       position:        'fixed',
       inset:           0,
       backgroundColor: '#001f3f',
@@ -165,16 +166,19 @@ function Root() {
   // index.html paints the body navy so there's no white flash before this mounts;
   // hand back to the normal light background once the app is ready
   useEffect(() => { if (ready) document.body.style.backgroundColor = ''; }, [ready]);
+  // Android back button: popups, unsaved-changes prompt, screens, exit (shared/backNav)
+  useEffect(() => installBackButton(), []);
 
   if (!ready) {
     return <BootSplash onReady={() => setReady(true)} />;
   }
 
-  return (
+  return (<>
     <AppLock>
       <App />
     </AppLock>
-  );
+    <LeaveDialogHost />
+  </>);
 }
 
 // ── Mount immediately — first frame renders BootSplash (hides Android splash) ─

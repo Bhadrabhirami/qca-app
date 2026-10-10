@@ -128,7 +128,7 @@ function PinPad({ mode, onSuccess, onCancel }: {
 // ─── Full-screen lock ─────────────────────────────────────────────────────────
 function LockScreen({ onUnlock }: { onUnlock: () => void }) {
   return (
-    <div style={{
+    <div data-back-root data-back-exit style={{
       position:'fixed', inset:0, zIndex:9999,
       backgroundColor:'#060e09',
       display:'flex', flexDirection:'column',
