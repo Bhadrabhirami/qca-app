@@ -304,13 +304,23 @@ function QuickPayModal({student,base,onClose,onSuccess}:{
   );
 }
 
-// ── Generate last N billing months ───────────────────────────────────────────
-function genMonths(n=24):string[]{
-  return Array.from({length:n},(_,i)=>{
-    const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
-    return d.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}).replace(' ','-');
-  });
+// Students present within this many days count as attending (Reminders hub filter)
+const ATTEND_DAYS = 90;
+function daysSince(iso?: string | null): number | null {
+  if (!iso) return null;
+  const d = new Date(iso.slice(0,10) + 'T00:00:00');
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
 }
+const lastPresentText = (iso?: string | null) => {
+  const n = daysSince(iso);
+  return n === null ? 'never present' : n <= 0 ? 'present today' : n === 1 ? 'present yesterday' : `last present ${n}d ago`;
+};
+
+const chipStyle=(on:boolean,bg:string,fg:string):React.CSSProperties=>({
+  padding:'6px 10px',borderRadius:20,border:'none',cursor:'pointer',fontSize:11.5,fontWeight:800,
+  whiteSpace:'nowrap',backgroundColor:on?bg:'#fff',color:on?fg:C.muted,boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
+});
 
 // ── Reminder Quick Pay ────────────────────────────────────────────────────────
 // Uses bulk-record endpoint — one receipt per month, newest first
@@ -318,10 +328,8 @@ function ReminderQuickPay({row,base,onClose,onSuccess}:{
   row:any; base:string;
   onClose:()=>void; onSuccess:()=>void;
 }){
-  const allMonths   = genMonths(24);
-  const dueMonths   = (row.due_months||'').split(', ').filter(Boolean);
-  // Order due months newest first using allMonths as reference
-  const ordered     = allMonths.filter(m=>dueMonths.includes(m));
+  // The server sends due months newest first (same calculation as the Payments page)
+  const ordered: string[] = (row.due_months||'').split(', ').filter(Boolean);
   const monthlyFee  = Number(row.monthly_fee)||0;
 
   const [selected,  setSelected]  = useState<Set<string>>(()=>new Set(ordered.slice(0,1)));
@@ -542,9 +550,7 @@ function ReminderWriteOff({row,base,onClose,onSuccess}:{
   row:any; base:string;
   onClose:()=>void; onSuccess:()=>void;
 }){
-  const allMonths  = genMonths(24);
-  const dueMonths  = (row.due_months||'').split(', ').filter(Boolean);
-  const ordered    = allMonths.filter(m=>dueMonths.includes(m));
+  const ordered: string[] = (row.due_months||'').split(', ').filter(Boolean);   // newest first, from the server
   const monthlyFee = Number(row.monthly_fee)||0;
 
   const [selected, setSelected] = useState<Set<string>>(new Set()); // none pre-ticked
@@ -856,6 +862,9 @@ function StudentCard({row,base,onSent,onPayment,can}:{
               </span>
             )}
             {row.parent_name ? ` · 👤 ${row.parent_name}` : ''}
+            {!row.parent_phone && !row.parent_email && (
+              <span style={{color:C.red,fontWeight:700}}> · ⚠ no phone or email</span>
+            )}
           </div>
         </div>
         <div style={{flexShrink:0,textAlign:'right' as const}}>
@@ -881,6 +890,8 @@ function StudentCard({row,base,onSent,onPayment,can}:{
       <div style={{padding:'5px 12px',backgroundColor:'#f8fafc',fontSize:11,color:C.muted,
         borderTop:`1px solid ${C.border}`,borderBottom:`1px solid ${C.border}`}}>
         <b style={{color:C.green}}>{row.current_attendance}</b> sessions this month ·{' '}
+        {'last_present' in row && <><span style={{color:(daysSince(row.last_present) ?? 9999) > ATTEND_DAYS ? C.red : C.muted}}>
+          {lastPresentText(row.last_present)}</span> ·{' '}</>}
         <b style={{color:C.navy}}>₹{(row.monthly_fee||0).toLocaleString('en-IN')}</b>/mo ·{' '}
         joined {row.enrollment_date?.slice(0,10)||'—'}
       </div>
@@ -1182,9 +1193,10 @@ export default function RemindersScreen(){
 
   // Search + filter
   const [search,     setSearch]     =useState('');
-  const [filterDue,  setFilterDue]  =useState<'all'|'1'|'2'|'3+'>('all');
-  const [filterEmail,setFilterEmail]=useState<'all'|'has'|'none'>('all');
-  const [sortBy,     setSortBy]     =useState<'balance'|'name'|'months'>('balance');
+  const [filterDue,  setFilterDue]  =useState<'all'|'1-2'|'3+'>('all');
+  // Attending = marked present in the last 90 days (default on)
+  const [attendingOnly,setAttendingOnly]=useState(true);
+  const [sortBy,     setSortBy]     =useState<'due'|'name'>('due');
 
   // Quick pay modal
   const [payStudent,setPayStudent]=useState<any|null>(null);
@@ -1210,6 +1222,18 @@ export default function RemindersScreen(){
     ));
   };
 
+  // Older servers don't send last_present: the attending filter is then switched off
+  const hasPresence=data.some(r=>'last_present' in r);
+  const isAttending=(r:any)=>{const n=daysSince(r.last_present);return n!==null&&n<=ATTEND_DAYS;};
+  const attendingN=data.filter(isAttending).length;
+  // Header totals follow the Attending / All active choice
+  const scope=attendingOnly&&hasPresence?data.filter(isAttending):data;
+  const stats={
+    total_balance:   scope.reduce((t,r)=>t+(r.balance_due||0),0),
+    total_accounts:  scope.length,
+    urgent_accounts: scope.filter(r=>(r.total_unpaid||0)>=3).length,
+  };
+
   // Apply search + filters + sort
   const filtered=data
     .filter(row=>{
@@ -1221,17 +1245,17 @@ export default function RemindersScreen(){
       }
       if(filterDue!=='all'){
         const n=row.total_unpaid||0;
-        if(filterDue==='1'&&n!==1) return false;
-        if(filterDue==='2'&&n!==2) return false;
+        if(filterDue==='1-2'&&n>2) return false;
         if(filterDue==='3+'&&n<3)  return false;
       }
-      if(filterEmail==='has'&&!row.parent_email) return false;
-      if(filterEmail==='none'&&row.parent_email) return false;
+      if(attendingOnly&&hasPresence){
+        const n=daysSince(row.last_present);
+        if(n===null||n>ATTEND_DAYS) return false;
+      }
       return true;
     })
     .sort((a,b)=>{
       if(sortBy==='name')    return (a.student_name||'').localeCompare(b.student_name||'');
-      if(sortBy==='months')  return (b.total_unpaid||0)-(a.total_unpaid||0);
       return (b.balance_due||0)-(a.balance_due||0); // default: balance
     });
 
@@ -1263,7 +1287,7 @@ export default function RemindersScreen(){
             <div style={{flex:1,backgroundColor:'rgba(255,255,255,0.12)',
               borderRadius:10,padding:'6px 8px',textAlign:'center' as const}}>
               <div style={{color:C.gold,fontWeight:900,fontSize:16}}>
-                ₹{(summary.total_balance||0).toLocaleString('en-IN')}
+                ₹{(stats.total_balance||0).toLocaleString('en-IN')}
               </div>
               <div style={{color:'rgba(255,255,255,0.6)',fontSize:10,
                 fontWeight:700,textTransform:'uppercase' as const,marginTop:1}}>
@@ -1273,7 +1297,7 @@ export default function RemindersScreen(){
             <div style={{flex:1,backgroundColor:'rgba(255,255,255,0.12)',
               borderRadius:10,padding:'6px 8px',textAlign:'center' as const}}>
               <div style={{color:'#fff',fontWeight:900,fontSize:16}}>
-                {summary.total_accounts}
+                {stats.total_accounts}
               </div>
               <div style={{color:'rgba(255,255,255,0.6)',fontSize:10,
                 fontWeight:700,textTransform:'uppercase' as const,marginTop:1}}>
@@ -1283,7 +1307,7 @@ export default function RemindersScreen(){
             <div style={{flex:1,backgroundColor:'rgba(220,38,38,0.3)',
               borderRadius:10,padding:'6px 8px',textAlign:'center' as const}}>
               <div style={{color:'#fca5a5',fontWeight:900,fontSize:16}}>
-                {summary.urgent_accounts}
+                {stats.urgent_accounts}
               </div>
               <div style={{color:'rgba(255,255,255,0.6)',fontSize:10,
                 fontWeight:700,textTransform:'uppercase' as const,marginTop:1}}>
@@ -1363,47 +1387,32 @@ export default function RemindersScreen(){
             )}
           </div>
 
-          {/* Filter chips */}
-          <div style={{display:'flex',gap:6,overflowX:'auto' as const,
-            paddingBottom:4,scrollbarWidth:'none' as any}}>
-            {/* Sort */}
-            {(['balance','months','name'] as const).map(s=>(
-              <button key={s} onClick={()=>setSortBy(s)} style={{
-                padding:'5px 12px',borderRadius:20,border:'none',
-                cursor:'pointer',fontSize:11,fontWeight:700,
-                whiteSpace:'nowrap' as const,
-                backgroundColor:sortBy===s?C.navy:'#fff',
-                color:sortBy===s?C.gold:C.muted,
-                boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
-              }}>
-                {s==='balance'?'↕ Balance':s==='months'?'↕ Months':'↕ Name'}
-              </button>
+          {/* Attending filter */}
+          {hasPresence&&(
+            <div style={{display:'flex',gap:0,marginBottom:8,borderRadius:10,overflow:'hidden',
+              border:`1px solid ${C.border}`,backgroundColor:'#fff'}}>
+              {([[true,`🟢 Attending · ${attendingN}`],[false,`All active · ${data.length}`]] as const).map(([on,label])=>(
+                <button key={String(on)} onClick={()=>setAttendingOnly(on)} style={{
+                  flex:1,padding:'8px 6px',border:'none',cursor:'pointer',fontSize:12,fontWeight:800,
+                  backgroundColor:attendingOnly===on?C.green:'#fff',color:attendingOnly===on?'#fff':C.muted}}>{label}</button>
+              ))}
+            </div>
+          )}
+          {hasPresence&&(
+            <div style={{fontSize:11,color:C.muted,margin:'-4px 2px 8px'}}>
+              {attendingOnly?`Attending = present at least once in the last ${ATTEND_DAYS} days`
+                :'All active students with dues, including those not seen for a while'}
+            </div>
+          )}
+
+          {/* Sort + dues filter: one row */}
+          <div style={{display:'flex',alignItems:'center',gap:5}}>
+            {([['due','Most due'],['name','A–Z']] as const).map(([k,label])=>(
+              <button key={k} onClick={()=>setSortBy(k)} style={chipStyle(sortBy===k,C.navy,C.gold)}>{label}</button>
             ))}
-            {/* Due count filter */}
-            {(['all','1','2','3+'] as const).map(f=>(
-              <button key={f} onClick={()=>setFilterDue(f)} style={{
-                padding:'5px 12px',borderRadius:20,border:'none',
-                cursor:'pointer',fontSize:11,fontWeight:700,
-                whiteSpace:'nowrap' as const,
-                backgroundColor:filterDue===f?C.red:'#fff',
-                color:filterDue===f?'#fff':C.muted,
-                boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
-              }}>
-                {f==='all'?'All Dues':`${f} mo`}
-              </button>
-            ))}
-            {/* Email filter */}
-            {(['all','has','none'] as const).map(f=>(
-              <button key={f} onClick={()=>setFilterEmail(f)} style={{
-                padding:'5px 12px',borderRadius:20,border:'none',
-                cursor:'pointer',fontSize:11,fontWeight:700,
-                whiteSpace:'nowrap' as const,
-                backgroundColor:filterEmail===f?C.green:'#fff',
-                color:filterEmail===f?'#fff':C.muted,
-                boxShadow:'0 1px 4px rgba(0,0,0,0.08)',
-              }}>
-                {f==='all'?'All':f==='has'?'✉ Has Email':'No Email'}
-              </button>
+            <span style={{width:1,height:18,backgroundColor:C.border,margin:'0 2px'}}/>
+            {([['all','All'],['1-2','1–2 mo'],['3+','3+ Critical']] as const).map(([k,label])=>(
+              <button key={k} onClick={()=>setFilterDue(k)} style={chipStyle(filterDue===k,C.red,'#fff')}>{label}</button>
             ))}
           </div>
 
@@ -1411,6 +1420,7 @@ export default function RemindersScreen(){
           <div style={{fontSize:12,color:C.muted,marginTop:8,marginBottom:4}}>
             Showing {filtered.length} of {data.length} students
             {search&&` matching "${search}"`}
+            {` · ₹${filtered.reduce((t,r)=>t+(r.balance_due||0),0).toLocaleString('en-IN')} due`}
           </div>
         </div>
       )}
@@ -1420,8 +1430,8 @@ export default function RemindersScreen(){
         {queried&&!loading&&filtered.length===0&&data.length>0&&(
           <div style={{textAlign:'center',padding:'32px 0',color:C.muted}}>
             <div style={{fontSize:32,marginBottom:8}}>🔍</div>
-            <div style={{fontWeight:700}}>No match for "{search}"</div>
-            <button onClick={()=>{setSearch('');setFilterDue('all');setFilterEmail('all');}}
+            <div style={{fontWeight:700}}>{search?`No match for "${search}"`:'No students match these filters'}</div>
+            <button onClick={()=>{setSearch('');setFilterDue('all');setAttendingOnly(false);}}
               style={{marginTop:10,padding:'7px 16px',borderRadius:20,border:'none',
                 backgroundColor:C.navy,color:C.gold,fontWeight:700,
                 fontSize:12,cursor:'pointer'}}>
